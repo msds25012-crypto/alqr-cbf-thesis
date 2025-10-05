@@ -48,7 +48,8 @@ ln_eps = jnp.asarray(model.ln_final.ln_eps)
 ln_b = jnp.asarray(model.ln_final.b.detach())
 W_U_jn = jnp.asarray(model.unembed.W_U[None].detach())
 
-input = th.tensor([32990])
+input = th.tensor([10000])
+# input = th.tensor([32990])
 
 # Time and stage parameters -- do we care about anything other than N?
 dt = 0.02  # Time step in seconds
@@ -65,7 +66,9 @@ x = x + model.pos_embed(input)
 # p_numpy = x.detach().cpu().numpy() 
 # p0 = jnp.array(p_numpy)
 p0 = jnp.asarray(x.detach())
-print(f"p0 shape in config: {p0.shape}")
+# print(f"p0 in config: {p0}")
+# print(f"x0 in config: {x}")
+# print(f"p0 shape in config: {p0.shape}")
 
 # Determine number of joints and contacts from the lists
 
@@ -82,22 +85,24 @@ Qp = jnp.diag(jnp.ones(n))  # Cost matrix for position
 # Qu = jnp.ones(m)  # Cost matrix for control
 Qu = jnp.diag(jnp.ones(m))  # Cost matrix for control
 
-print(Qp.size)
-print(Qu.size)
+# print(Qp.size)
+# print(Qu.size)
 
 # jnp.expand_dims(Qp,0)/
 # jnp.expand_dims(Qu,0)
 W = jax.scipy.linalg.block_diag(Qp, Qu)
 # W = jnp.concatenate([Qp,Qu])
+target = 1537
+
 
 use_terrain_estimation = False  # Flag to use terrain estimation
 
 ln = partial(jax_components.layer_norm, ln_w, ln_b, ln_eps)
 
-cost = partial(gpt_mpc_utils.gpt_obj, model, W_U_jn, ln)
-hessian_approx = partial(gpt_mpc_utils.gpt_hessian, model, W_U_jn, N)
+cost = partial(gpt_mpc_utils.gpt_obj, model, W_U_jn, ln, target)
+hessian_approx = partial(gpt_mpc_utils.gpt_hessian, model, W_U_jn, N, target)
 dynamics = partial(gpt_mpc_utils.gpt_dynamics, tfs_jax)
 
-target = 1537
+# target = 1600
 
 

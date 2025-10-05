@@ -19,7 +19,7 @@ model = Transformer.from_pretrained(model_name).to(device)
 assumes controller has length equivalent to the number of blocks.
 '''
 # input = th.tensor([32990])
-input = th.tensor([32900])
+input = th.tensor([1])
 print(f"input: {input}")
 
 onehot = th.nn.functional.one_hot(input, num_classes=model.embed.d_vocab).float().to(device)

@@ -99,6 +99,7 @@ def attention(x, W_Q, b_Q, W_K, b_K, W_V, b_V, W_O, b_O, mask, d_head):
     # x shape: (batch,1, pos, d_model)
     d_model = x.shape[-1]
     # print(f"x shape: {x.shape}")
+    # print(f"x: {x}")
     # batch, pos, d_model = x.shape
     n_heads = W_Q.shape[0]
     
