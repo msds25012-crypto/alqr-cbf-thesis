@@ -1,0 +1,9 @@
+---------------------------------------
+Begin Slurm Prolog: Oct-16-2025 16:19:39
+Job ID:    3421114
+User ID:   jskifstad3
+Account:   ece
+Job name:  lqr
+Partition: coc-gpu
+QOS:       coc-ice
+---------------------------------------

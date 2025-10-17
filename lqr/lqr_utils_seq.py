@@ -21,7 +21,8 @@ def linearize(tfs, T, m, X_nom):
         B: linearized B matrices (T, n, m)
     """
     U_nom = th.zeros([T, m], device=X_nom.device)
-    n = X_nom.shape[1]
+    n = X_nom.shape[-1]
+    # print(X_nom.shape)
 
     A = th.zeros((T, n, n), dtype=X_nom.dtype, device=X_nom.device)
     B = th.zeros((T, n, m), dtype=X_nom.dtype, device=X_nom.device)
@@ -29,14 +30,22 @@ def linearize(tfs, T, m, X_nom):
     for t in range(T):
         x = X_nom[t].detach().requires_grad_(True)
         u = U_nom[t].detach().requires_grad_(True)
+
         f_eval = tfs[t](x,u)
+        # f_eval = tfs[t](x,u).detach().requires_grad_(True)
         # f_eval = tfs(x,u)
         # print(f"feval shape: {f_eval.shape}")
+        # f_eval = f_eval[:,-1,:].detach().requires_grad_(True)
+        # print(f"feval shape: {f_eval.shape}")
+        # print(f"x shape: {x.shape}")
 
         for i in range(n):
-            grad_x = th.autograd.grad(f_eval[...,i], x, retain_graph=True, create_graph=False)[0]
-            grad_u = th.autograd.grad(f_eval[...,i], u, retain_graph=True, create_graph=False)[0]
-            A[t, i] = grad_x
+            grad_x = th.autograd.grad(f_eval[...,-1,i], x, retain_graph=True, create_graph=False)[0]
+            grad_u = th.autograd.grad(f_eval[...,-1,i], u, retain_graph=True, create_graph=False)[0]
+            # print(f"gradx shape: {grad_x[-1,:].shape}")
+            # print(f"eeeee: {A[t, i].shape}")
+            A[t, i] = grad_x[-1,:]
+            # print("here")
             B[t, i] = grad_u
 
     return A, B
@@ -83,7 +92,9 @@ def time_varying_lqr(A, B, Q, R, S_T):
     return K
 
 def transformerBlockControl(tf, x, u):
-    return tf(x) + u
+    x_next = tf(x)
+    x_next[:,-1,:] = x_next[:,-1,:] + u
+    return x_next
 
 
 def find_random_target(model, x0):

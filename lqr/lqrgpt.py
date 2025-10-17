@@ -1,9 +1,18 @@
+import os
+import sys
+
+root_path = os.path.abspath('..')
+
+if root_path not in sys.path:
+    sys.path.insert(0, root_path)
+
 import torch as th
 from lpe.lpe.utils import Transformer
 import matplotlib.pyplot as plt
 from functools import partial
 import lqr_utils as lqr
 import time
+from lpe.lpe.method_utils import *
 
 model_name = "gelu-4l"
 device = th.device("cuda" if th.cuda.is_available() else "cpu")
@@ -18,11 +27,12 @@ T = len(tfs_with_control)
 
 
 # input = th.tensor([32990])
-input = th.tensor([20])
+# input = th.tensor([100])
+# print(input.shape)
 # input = th.tensor([10000])
 
 
-
+print("donkey")
 U_nom = th.zeros((T, m), device=device)
 X_nom = th.zeros((T+1, n), device=device)
 # X_nom[0] = x + model.pos_embed(input)
@@ -36,17 +46,41 @@ X_nom = th.zeros((T+1, n), device=device)
 # random_input = th.tensor([37990])
 # mock_inputs = th.tensor([1, 2, 49, 100, 500, 1000, 5000, 8000, 10000, 12000, 14000, 15000, 20000, 23000, 27000, 30000, 40000, 48261])
 # mock_inputs = th.arange(25) * 4
-mock_inputs = th.arange(1) * 4
+# mock_inputs = th.arange(10, 60) * 800
+dist_name = "camel"
+gt_freqs = load_ground_truth(model_name, [dist_name], device=device)[dist_name] # ground truth tensor
+gt_probs = gt_freqs / gt_freqs.sum()
+# mock_inputs = th.tensor(pick_random_tokens(gt_freqs, , 1e-9, 1e-5)).unsqueeze(-1)
 # mock_inputs[0] = input
+mock_inputs = th.tensor([479])
+# mock_inputs = th.arange(0,48262,1200)
+# input = th.tensor(pick_random_tokens(gt_freqs, 1, 1e-9, 1e-5))
 u_norms = []
 
 num_success = 0
+num_trials = 0
+# print(f"rand input: {input}")
+
+
+# inputs = th.arange(0,48262, 900)
+inputs = th.arange(0,48262, 10000)
+# inputs = th.tensor([200])
+print(f"len inputs: {len(inputs)}")
+
+prev_time = time.perf_counter()
+
 
 for random_input in mock_inputs:
+    print(f"mock input: {random_input}")
+    curr_time = time.perf_counter()
+    print(f"time of iteration: {curr_time - prev_time}")
+    prev_time = curr_time
+    print(f"current score = {num_success / max(num_trials,1)}")
     onehot = th.nn.functional.one_hot(random_input, num_classes=model.embed.d_vocab).float().to(device)
     onehot.requires_grad_(True)
     x_tar = onehot @ model.embed.W_E
-    x_tar = x_tar + model.pos_embed(input)
+    # print(random_input)
+    x_tar = x_tar + model.pos_embed(random_input.unsqueeze(0))
 
     X_nom[0] = x_tar
     # X_nom[T] = lqr.find_random_target(model,x_tar)
@@ -79,45 +113,48 @@ for random_input in mock_inputs:
 
     # Solve LQR on linearized system
     K = lqr.time_varying_lqr(A, B, Q, R, Qf)
-
     # print("Feedback gains K shape:", K.shape)
     # print("K[0]:", K[0])
 
-    X = th.zeros_like(X_nom)
-    U = th.zeros_like(U_nom)
+    for input in inputs.unsqueeze(-1):
 
-    onehot = th.nn.functional.one_hot(input, num_classes=model.embed.d_vocab).float().to(device)
-    onehot.requires_grad_(True)
-    x = onehot @ model.embed.W_E
+        X = th.zeros_like(X_nom)
+        U = th.zeros_like(U_nom)
+
+        onehot = th.nn.functional.one_hot(input, num_classes=model.embed.d_vocab).float().to(device)
+        onehot.requires_grad_(True)
+        x = onehot @ model.embed.W_E
 
 
-    X[0] = x + model.pos_embed(input)
-    # X[0] = X_nom[0]
-    for i in range(T):
-        U[i] = U_nom[i]-K[i]@(X[i]-X_nom[i])
-        X[i+1] = tfs_with_control[i](X[i], U[i])
+        X[0] = x + model.pos_embed(input)
+        # X[0] = X_nom[0]
+        for i in range(T):
+            U[i] = U_nom[i]-K[i]@(X[i]-X_nom[i])
+            X[i+1] = tfs_with_control[i](X[i], U[i])
 
-    # print(f"U[0]: {U[0]}")
-    # print(f"U[1]: {U[1]}")
-    # print(f"U[-1]: {U[-1]}")
+        # print(f"U[0]: {U[0]}")
+        # print(f"U[1]: {U[1]}")
+        # print(f"U[-1]: {U[-1]}")
 
-    x = model.ln_final(X[T].unsqueeze(0).unsqueeze(0))
-    logits_found = model.unembed(x).squeeze(1)
-    target_found = logits_found.argmax(-1)
-    end_time = time.perf_counter()
+        x = model.ln_final(X[T].unsqueeze(0).unsqueeze(0))
+        logits_found = model.unembed(x).squeeze(1)
+        target_found = logits_found.argmax(-1)
+        end_time = time.perf_counter()
 
-    # print(f"found: {target_found}")
-    if not th.equal(target_found, target):
-        print(f"target NOT reached: {target}")
-        print(f"generated from input: {random_input}")
-    else: 
-        num_success = num_success+1
-        print(f"target reached: {target}")
-        print(f"generated from input: {random_input}")
-        # print(f"lqr x0: {input}")
+        # print(f"found: {target_found}")
+        # if not th.equal(target_found, target):
+        #     print(f"target NOT reached: {target}")
+        #     print(f"generated from input: {random_input}")
+        # else: 
+        if th.equal(target_found, target):
+            num_success = num_success+1
+            # print(f"target reached: {target}")
+            # print(f"generated from input: {random_input}")
+            # print(f"lqr x0: {input}")
 
-    us = th.norm(U)
-    u_norms.append(th.mean(us).cpu().detach().numpy())
+        # us = th.norm(U)
+        # u_norms.append(th.mean(us).cpu().detach().numpy())
+        num_trials=num_trials+1
 # print(f"time elapsed for lqr computation: {end_time - start_time}")
 # plt.plot(mock_inputs.cpu().numpy(), range(5))
 # plt.plot(mock_inputs.cpu().numpy(), u_norms)
@@ -126,7 +163,9 @@ for random_input in mock_inputs:
 # plt.title("input = [20]")
 # plt.savefig("lqr_gpt_100.png")
 
-print(f"Success rate: {num_success/len(mock_inputs)}")
+# print(f"Success rate: {num_success/len(mock_inputs)}")
+print(f"num successes: {num_success}")
+print(f"Success rate: {num_success/(len(mock_inputs) * len(inputs))}")
 
 
 

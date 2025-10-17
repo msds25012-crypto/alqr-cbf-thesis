@@ -1,0 +1,24 @@
+---------------------------------------
+Begin Slurm Prolog: Oct-15-2025 13:14:45
+Job ID:    3400131
+User ID:   jskifstad3
+Account:   ece
+Job name:  probe
+Partition: coc-gpu
+QOS:       coc-ice
+---------------------------------------
+Total num successes: 0
+Success rate STEEERED: 0.0
+Total runtime: 1343.711353869061
+---------------------------------------
+Begin Slurm Epilog: Oct-15-2025 13:39:39
+Job ID:        3400131
+User ID:       jskifstad3
+Account:       ece
+Job name:      probe
+Resources:     cpu=12,gres/gpu:v100=1,mem=48G,node=1
+Rsrc Used:     cput=04:58:48,vmem=0,walltime=00:24:54,mem=2152956K,energy_used=0
+Partition:     coc-gpu
+QOS:           coc-ice
+Nodes:         atl1-1-01-002-6-0
+---------------------------------------
