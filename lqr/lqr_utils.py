@@ -10,11 +10,6 @@ import torch as th
 # from lpe.lpe.utils import Transformer
 import matplotlib.pyplot as plt
 
-
-# model_name = "gelu-2l"
-# device = th.device("cuda" if th.cuda.is_available() else "cpu")
-# model = Transformer.from_pretrained(model_name).to(device)
-
 def linearize(tfs, T, m, X_nom):
     """
     Linearize nonlinear dynamics f around nominal trajectory (X_nom, U_nom=0).
