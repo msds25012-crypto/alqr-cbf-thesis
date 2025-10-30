@@ -50,11 +50,12 @@ X_nom = th.zeros((T+1, n), device=device)
 dist_name = "camel"
 gt_freqs = load_ground_truth(model_name, [dist_name], device=device)[dist_name] # ground truth tensor
 gt_probs = gt_freqs / gt_freqs.sum()
-# mock_inputs = th.tensor(pick_random_tokens(gt_freqs, , 1e-9, 1e-5)).unsqueeze(-1)
+# mock_inputs = th.tensor(pick_random_tokens(gt_freqs, 5, 1e-9, 1e-5)).unsqueeze(-1)
 # mock_inputs[0] = input
 mock_inputs = th.tensor([479])
+# mock_inputs = th.tensor([9409])
 # mock_inputs = th.arange(0,48262,1200)
-# input = th.tensor(pick_random_tokens(gt_freqs, 1, 1e-9, 1e-5))
+# mock_inputs = th.arange(0,48262,20000)
 u_norms = []
 
 num_success = 0
@@ -63,15 +64,31 @@ num_trials = 0
 
 
 # inputs = th.arange(0,48262, 900)
-inputs = th.arange(0,48262, 10000)
-# inputs = th.tensor([200])
+# inputs = th.arange(0,48262, 10000)
+inputs = th.tensor([200, 1251, 521])
 print(f"len inputs: {len(inputs)}")
 
 prev_time = time.perf_counter()
 
+import torch.nn.functional as F
+
+def calc_KL(p, q):
+    eps = 0.01
+    p = model.ln_final(p.unsqueeze(0).unsqueeze(0))
+    # print(f"p: {p}")
+    p = model.unembed(p).squeeze(1) + eps
+    # p = th.exp(p) / (1 + th.exp(p))
+    p = F.softmax(p, dim=-1)
+    q = model.ln_final(q.unsqueeze(0).unsqueeze(0))
+    # print(f"q: {q}")
+    q = model.unembed(q).squeeze(1) + eps
+    # q = th.exp(q) / (1 + th.exp(q))
+    q = F.softmax(q, dim=-1)
+
+    return (p * (th.log(p) - th.log(q))).sum(dim=-1)
 
 for random_input in mock_inputs:
-    print(f"mock input: {random_input}")
+    # print(f"mock input: {random_input}")
     curr_time = time.perf_counter()
     print(f"time of iteration: {curr_time - prev_time}")
     prev_time = curr_time
@@ -99,15 +116,37 @@ for random_input in mock_inputs:
     # print(logits.shape)
 
     target = logits.argmax(-1)
+    # print(f"GROUND TRUTH P: {gt_probs[target.item()]}")
     # print(f"random input: {random_input}")
-    # print(f"target: {target}")
 
     ## Linearize dynamics around nominal
     start_time = time.perf_counter()
     A, B = lqr.linearize(tfs_with_control,T,m,X_nom)
+    # lqr.print_matrix(A)
+    # print(f"B = {B}")
+
+    # X_lin = th.zeros_like(X_nom)
+    # X_lin[0] = X_nom[0]
+    # for i, Ai in enumerate(A):
+    #     X_lin[i+1] = Ai@X_lin[i]
+
+    # x_lnfinal_lin = model.ln_final(X_lin[T].unsqueeze(0).unsqueeze(0))
+    # # print(x.shape)
+    # logits_lin = model.unembed(x_lnfinal_lin).squeeze(1)
+    # # print(logits.shape)
+
+    # target_lin = logits_lin.argmax(-1)
+    # print(f"target_lin: {target_lin}")
+    print(f"target: {target}")
+
+
+    # for i in th.arange(X_nom.shape[0]):
+    #     err = lqr.normed_error(X_nom[i], X_lin[i])
+    #     print(f"Error at time {i}: {err}")
 
     # # Define quadratic cost matrices
     Q = th.eye(n).unsqueeze(0).repeat(T, 1, 1).to(A.device) * 1
+
     R = th.eye(m).unsqueeze(0).repeat(T, 1, 1).to(A.device) * 1
     Qf = 10000 * th.eye(n).to(A.device)
 
@@ -127,10 +166,21 @@ for random_input in mock_inputs:
 
 
         X[0] = x + model.pos_embed(input)
+        # X_un = th.zeros_like(X_nom)
+        # X_un[0] = X[0]
         # X[0] = X_nom[0]
         for i in range(T):
-            U[i] = U_nom[i]-K[i]@(X[i]-X_nom[i])
-            X[i+1] = tfs_with_control[i](X[i], U[i])
+            U[i] = -K[i]@(X[i]-X_nom[i])
+            # U[i] = U_nom[i]-K[i]@(X[i])
+            # U[i] = -(X[i]-X_nom[i])
+            X[i+1] = tfs_with_control[i](X[i], B[i]@U[i])
+            # X_un[i+1] = model.blocks[i](X_un[i])
+
+            # err = calc_KL(X[i+1], X_nom[i+1])
+            # err_un = calc_KL(X_un[i+1], X_nom[i+1])
+            # print(f"KL at time {i+1}: {err}")
+            # print(f"un KL at time {i+1}: {err_un}")
+            # print("")
 
         # print(f"U[0]: {U[0]}")
         # print(f"U[1]: {U[1]}")
@@ -141,7 +191,7 @@ for random_input in mock_inputs:
         target_found = logits_found.argmax(-1)
         end_time = time.perf_counter()
 
-        # print(f"found: {target_found}")
+        print(f"found: {target_found}")
         # if not th.equal(target_found, target):
         #     print(f"target NOT reached: {target}")
         #     print(f"generated from input: {random_input}")
@@ -150,11 +200,29 @@ for random_input in mock_inputs:
             num_success = num_success+1
             # print(f"target reached: {target}")
             # print(f"generated from input: {random_input}")
+        else:
+            print(f"NOT REACHED: {target}")
             # print(f"lqr x0: {input}")
 
         # us = th.norm(U)
         # u_norms.append(th.mean(us).cpu().detach().numpy())
         num_trials=num_trials+1
+
+        X_check = th.zeros_like(X_nom)
+        X_check[0] = X[0]
+        for i, block in enumerate(model.blocks):
+            X_check[i+1] = block(X_check[i])
+        # X_nom[i] = tfs_raw[i-1](X_nom[i-1]
+
+
+        x_lnfinal = model.ln_final(X_check[T].unsqueeze(0).unsqueeze(0))
+        # print(x.shape)
+        logits = model.unembed(x_lnfinal).squeeze(1)
+        # print(logits.shape)
+
+        check = logits.argmax(-1)
+        print(f"unsteered: {check}")
+
 # print(f"time elapsed for lqr computation: {end_time - start_time}")
 # plt.plot(mock_inputs.cpu().numpy(), range(5))
 # plt.plot(mock_inputs.cpu().numpy(), u_norms)
@@ -177,22 +245,24 @@ print(f"Success rate: {num_success/(len(mock_inputs) * len(inputs))}")
 
 # start_time = time.perf_counter()
 
-onehot = th.nn.functional.one_hot(input, num_classes=model.embed.d_vocab).float().to(device)
-onehot.requires_grad_(True)
-x_p = onehot @ model.embed.W_E
-x_p = x_p + model.pos_embed(input)
-for block in model.blocks:
-    x_p = block(x_p)
-x_p = model.ln_final(x_p[:,-1].unsqueeze(1))
-logits = model.unembed(x_p).squeeze(1)
-y = logits.argmax(-1)
+# input = th.tensor([200])
 
-end_time = time.perf_counter()
+# onehot = th.nn.functional.one_hot(input, num_classes=model.embed.d_vocab).float().to(device)
+# onehot.requires_grad_(True)
+# x_p = onehot @ model.embed.W_E
+# x_p = x_p + model.pos_embed(input)
+# for block in model.blocks:
+#     x_p = block(x_p)
+# x_p = model.ln_final(x_p[:,-1].unsqueeze(1))
+# logits = model.unembed(x_p).squeeze(1)
+# y = logits.argmax(-1)
 
-print(f"output no steering = {y}")
-# # print(f"time elapsed for no-steering model: {end_time - start_time}")
+# end_time = time.perf_counter()
 
-# start_time = time.perf_counter()
+# print(f"output no steering = {y}")
+# # # print(f"time elapsed for no-steering model: {end_time - start_time}")
+
+# # start_time = time.perf_counter()
 
 # x_s = onehot @ model.embed.W_E
 # x_s = x_s + model.pos_embed(input)

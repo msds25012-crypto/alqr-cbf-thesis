@@ -1,3 +1,10 @@
+import os
+import sys
+
+root_path = os.path.abspath('..')
+
+if root_path not in sys.path:
+    sys.path.insert(0, root_path)
 from lpe.lpe.utils import Transformer
 from functools import partial
 import torch as th

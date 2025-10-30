@@ -1,0 +1,43 @@
+num imitate: 44
+Success rate: 0.11
+num recover: 3
+recover rate: 0.15
+
+num feedback: 1
+feedback recover rate: 0.05
+
+cumulative linearization percentages:
+1: tensor([13.4309], device='cuda:0', grad_fn=<DivBackward0>)
+2: tensor([13.4731], device='cuda:0', grad_fn=<DivBackward0>)
+3: tensor([8.6350], device='cuda:0', grad_fn=<DivBackward0>)
+4: tensor([9.5614], device='cuda:0', grad_fn=<DivBackward0>)
+
+cumulative linearization percentages (nominal):
+1: tensor([8.4307], device='cuda:0', grad_fn=<DivBackward0>)
+2: tensor([9.6231], device='cuda:0', grad_fn=<DivBackward0>)
+3: tensor([6.4226], device='cuda:0', grad_fn=<DivBackward0>)
+4: tensor([6.3272], device='cuda:0', grad_fn=<DivBackward0>)
+
+individual linearization percentages:
+1: tensor([6.2234], device='cuda:0', grad_fn=<DivBackward0>)
+2: tensor([2.5828], device='cuda:0', grad_fn=<DivBackward0>)
+3: tensor([3.3390], device='cuda:0', grad_fn=<DivBackward0>)
+4: tensor([2.5336], device='cuda:0', grad_fn=<DivBackward0>)
+
+individual linearization percentages (nominal):
+1: tensor([8.4307], device='cuda:0', grad_fn=<DivBackward0>)
+2: tensor([2.5021], device='cuda:0', grad_fn=<DivBackward0>)
+3: tensor([2.5977], device='cuda:0', grad_fn=<DivBackward0>)
+4: tensor([4.9608], device='cuda:0', grad_fn=<DivBackward0>)
+
+feedback linearization percentages (against nominal):
+1: tensor([8.4307], device='cuda:0', grad_fn=<DivBackward0>)
+2: tensor([3.0898], device='cuda:0', grad_fn=<DivBackward0>)
+3: tensor([2.4423], device='cuda:0', grad_fn=<DivBackward0>)
+4: tensor([4.9606], device='cuda:0', grad_fn=<DivBackward0>)
+
+steered model percentages:
+1: tensor([6.7797], device='cuda:0', grad_fn=<DivBackward0>)
+2: tensor([2.5981], device='cuda:0', grad_fn=<DivBackward0>)
+3: tensor([1.1414], device='cuda:0', grad_fn=<DivBackward0>)
+4: tensor([0.1289], device='cuda:0', grad_fn=<DivBackward0>)

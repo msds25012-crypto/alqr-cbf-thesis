@@ -7,7 +7,7 @@ if root_path not in sys.path:
     sys.path.insert(0, root_path)
     
 import torch as th
-from lpe.lpe.utils import Transformer
+# from lpe.lpe.utils import Transformer
 import matplotlib.pyplot as plt
 
 
@@ -92,6 +92,39 @@ def time_varying_lqr(A, B, Q, R, S_T):
 
     return K
 
+def time_varying_lqr_w_target(A, B, Q, R, S_T, x_tar):
+    """
+    Solve time-varying LQR with target final state x_tar.
+
+    J = (x_T - x_tar)^T S_T (x_T - x_tar) + sum_t (x_t^T Q_t x_t + u_t^T R_t u_t)
+    """
+    T, n, m = B.shape
+
+    S = th.zeros((T + 1, n, n), dtype=A.dtype, device=A.device)
+    s = th.zeros((T + 1, n), dtype=A.dtype, device=A.device)
+    K = th.zeros((T, m, n), dtype=A.dtype, device=A.device)
+    kff = th.zeros((T, m), dtype=A.dtype, device=A.device)
+
+    # Terminal conditions
+    S[T] = S_T
+    s[T] = -S_T @ x_tar
+
+    # Backward recursion
+    for t in reversed(range(T)):
+        At, Bt, Qt, Rt = A[t], B[t], Q[t], R[t]
+        P = Bt.T @ S[t+1] @ Bt + Rt
+        F = Bt.T @ S[t+1] @ At
+        G = Qt + At.T @ S[t+1] @ At
+        P_inv = th.linalg.inv(P)
+
+        K[t] = P_inv @ F
+        kff[t] = P_inv @ (Bt.T @ s[t+1])
+
+        S[t] = G - F.T @ P_inv @ F
+        s[t] = At.T @ (s[t+1] - S[t+1] @ Bt @ kff[t])
+
+    return K, kff
+
 def transformerBlockControl(tf, x, u):
     return tf(x)[:,-1,:] + u
     # print(f"x.shape: {x.shape}")
@@ -107,6 +140,33 @@ def find_random_target(model, x0):
 def llama_block_wrapper(block, attention_mask, position_ids, x):
     x = x.unsqueeze(0).unsqueeze(0)
     return block(x, attention_mask, position_ids)[0]
+
+def normed_error(x,x_lin):
+    return th.norm(x - x_lin)/th.norm(x)
+
+
+def dimnormed_error(x,x_lin, d):
+    return th.norm(x - x_lin)/d
+
+def unnormed_error(x,x_lin):
+    return th.norm(x - x_lin)
+
+def print_matrix(M):
+    file_name = "matrix.txt"
+
+    with open(file_name, 'w') as file:
+        '''
+        assume shape (T, n, n)
+        '''
+        for t in range(M.shape[0]):
+            file.write("[")
+            for j in range(M.shape[1]):
+                row = ""
+                for i in range(M.shape[1]):
+                    row = row + str(M[t,i,j].item()) + " "
+                row = row + "\n"
+                file.write(row)
+            file.write("]\n\n")
 
 # Nonlinear dynamics example
 # def pendulum_dynamics(x, u, dt=0.05):
