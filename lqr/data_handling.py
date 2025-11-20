@@ -15,13 +15,15 @@ class ContrastiveBuilder:
         dataset_name
     ):
         self.model = model
-        self.device = model.device
+        self.device = self.model.device
+        print(f"model device: {self.device}")
         self.tokenizer = tokenizer
         self.dataset = load_dataset(dataset_name)
 
         self.T = len(self.model.model.layers)
         self.n = self.model.model.embed_tokens.embedding_dim
         self.m = self.n
+        print(f"Latent dim: {self.n}")
         self.A_sum = th.zeros((self.T, self.n, self.n,)).to(self.device)
         self.X_sum = th.zeros((self.T+1, self.n,)).to(self.device)
 
@@ -129,19 +131,20 @@ class ContrastiveBuilder:
             
             self.X_sum = self.X_sum + self.X[:,-1,:]
 
-            batch_size, seq_len = input_ids.shape
-            position_ids = th.arange(seq_len, dtype=th.long, device=self.device)
-            position_ids = position_ids.unsqueeze(0).expand(batch_size, seq_len).to(device)
+            # batch_size, seq_len = input_ids.shape
+            # position_ids = th.arange(seq_len, dtype=th.long, device=self.device)
+            # position_ids = position_ids.unsqueeze(0).expand(batch_size, seq_len).to(device)
 
-            position_embeddings = self.model.model.rotary_emb(hidden_states, position_ids)
+            # position_embeddings = self.model.model.rotary_emb(hidden_states, position_ids)
 
-            wrapped_tfs_temp = [partial(lqr.new_llama_block_wrapper, tf, attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
-            tfs_with_control_temp = [partial(lqr.transformerBlockControl, tf) for tf in wrapped_tfs_temp]
-            A, _ = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X)
-            self.A_sum = self.A_sum + A
+            # wrapped_tfs_temp = [partial(lqr.new_llama_block_wrapper, tf, attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
+            # tfs_with_control_temp = [partial(lqr.transformerBlockControl, tf) for tf in wrapped_tfs_temp]
+            # A, _ = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X)
+            # self.A_sum = self.A_sum + A
 
 
         total = num_samples*num_tokens
+        print(f"total: {total}")
         tensor_dict = {
             "X": self.X_sum / total,
             "A": self.A_sum / total
@@ -166,8 +169,8 @@ model = AutoModelForCausalLM.from_pretrained(
 dataset_name = "allenai/real-toxicity-prompts"
 dataguy = ContrastiveBuilder(model, tokenizer, dataset_name)
 
-filename = "llama-3.2-1b_nontox"
-dataguy.collect_data(1, 1, "toxicity", filename)
+filename = "llama-3.2-1b_tox"
+dataguy.collect_data(200, 1, "toxicity", filename, lb=0.8, ub=1)
 
 with open("../../scratch/" + filename + ".pkl", "rb") as f:
     loaded_tensors = pickle.load(f)
@@ -178,7 +181,6 @@ A = loaded_tensors["A"]
 
 print(f"X loaded: {X}")
 print(f"A loaded: {A}")
-
 # data = dataset["train"]
 
 

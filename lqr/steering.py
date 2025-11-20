@@ -4,6 +4,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 import lqr_utils_seq as lqr
 from functools import partial
 from enum import Enum
+import time
 
 class Mode(Enum):
     COLLECTING = 0
@@ -22,6 +23,9 @@ class LQRSteering:
         self,
         model: AutoModelForCausalLM,
         tokenizer: AutoTokenizer,
+        q: float = 10,
+        r: float = 10,
+        qf: float = 1,
         A: th.Tensor = None,
         contrastive_vecs: th.Tensor = None,
     ):
@@ -36,9 +40,6 @@ class LQRSteering:
         self.n = model.model.embed_tokens.embedding_dim
         self.m = self.n
 
-        q = 1 
-        r = 1
-        qf = 1000
 
         self.Q = th.eye(self.n).unsqueeze(0).repeat(self.T, 1, 1).to(self.device) * q
         self.R = th.eye(self.n).unsqueeze(0).repeat(self.T, 1, 1).to(self.device) * r
@@ -53,6 +54,8 @@ class LQRSteering:
 
         self.hooks = []
         self.mode = Mode.COLLECTING
+
+        self.iter = 0
 
 
     def hook_steering(self, layer_idx, module, input, output):
@@ -95,9 +98,21 @@ class LQRSteering:
 
     def hook_collector(self, layer_idx, module, input, output):
         # print("Collecting...")
-        self.X[layer_idx] = input[0][0,-1,:]
-        if layer_idx == self.T-1:
-            self.X[self.T] = output[0][...,-1,:]
+        # self.X[self.iter][layer_idx] = input[0][0,-1,:]
+        if self.iter == 0:
+            # print(f"iter in collector: {self.iter}")
+            self.X[self.iter][layer_idx] = input[0]
+            if layer_idx == self.T-1:
+                self.X[self.iter][self.T] = output[0]
+                # self.X[self.iter][self.T] = output[0][...,-1,:]
+                self.iter = self.iter + 1
+
+        else: # for everything other than the first layer, only collect last token position 
+            self.X[self.iter][layer_idx] = input[0][0,-1,:]
+            if layer_idx == self.T-1:
+                self.X[self.iter][self.T] = output[0][...,-1,:]
+                self.iter = self.iter + 1
+
         return output
     
     def register_collection_hooks(self):
@@ -123,10 +138,20 @@ class LQRSteering:
         # print(f"output.shape: {output.shape}")
     # if (layer_idx > 0):
         # print("Tracking...")
+        # if self.iter == 0:
         x_t = input[0][0,-1,:]
-        diff = x_t - self.X[layer_idx,-1,:]
-        
+        # print(f"iter in tracking: {self.iter}")
+        # print(f"X[iter] shape in tracking: {self.X[self.iter].shape}")
 
+        diff = x_t - self.X[self.iter][layer_idx,-1,:]
+            # u_t = -self.K[layer_idx]@(diff)
+
+        # else:
+        #     x_t = input[0][0,-1,:]
+        #     # print(f"iter in tracking: {self.iter}")
+        #     # print(f"X[iter] shape in tracking: {self.X[self.iter].shape}")
+
+        #     diff = x_t - self.X[self.iter][layer_idx,0,:]
         u_t = -self.K[layer_idx]@(diff)
         # print(u_t)
 
@@ -135,13 +160,14 @@ class LQRSteering:
         # print(f"input shape: {input[0].shape}")
         # print(f"u_t shape: {u_t.shape}")
         self.U[layer_idx] = u_t
-        self.X[layer_idx] = input[0][0,-1,:]
+        # self.X[layer_idx] = input[0][0,-1,:]
 
         # output[0][:,-1,:] = output[0][:,-1,:] + u_t # 4.40
         output[0][...,-1,:] = output[0][...,-1,:] + u_t # new
 
         if (layer_idx == self.T-1):
-            self.X[self.T] = output[0][...,-1,:] + u_t
+            # self.X[self.iter][self.T] = output[0][...,-1,:] + u_t
+            self.iter = self.iter + 1
         return output
     
     def register_tracking_hooks(self):
@@ -178,7 +204,7 @@ class LQRSteering:
         self.remove_hooks()
 
     def evaluate(self, prompt, max_new_tokens, do_sample=False, temp=0.7):
-        self.mode == Mode.STEERING
+        self.mode = Mode.STEERING
         
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
         input_ids = inputs["input_ids"]
@@ -204,8 +230,10 @@ class LQRSteering:
         output_str = self.tokenizer.decode(output.sequences[0], skip_special_tokens=True)
         return output_str
 
-    def single_token(self, nom_prompt, prompt):
+    def track_tokens(self, nom_prompt, prompt, k=1):
         self.mode = Mode.COLLECTING
+
+        start_time = time.perf_counter()
 
         nom_inputs = self.tokenizer(nom_prompt, return_tensors="pt").to(self.device)
         nom_input_ids = nom_inputs["input_ids"]
@@ -213,13 +241,20 @@ class LQRSteering:
 
         embedding_layer = self.model.get_input_embeddings()
         hidden_states = embedding_layer(nom_input_ids)
-        self.X = th.zeros_like(hidden_states).repeat(self.T+1, 1, 1).to(self.device)
+        self.X = [th.zeros_like(hidden_states).repeat(self.T+1, 1, 1).to(self.device)]
+        
+        sublist = [th.zeros_like(hidden_states[...,-1,:]).repeat(self.T+1, 1, 1).to(self.device) for i in range(k-1)]
+        self.X = self.X + sublist
+        self.iter = 0
+
+        print(f"len X: {len(self.X)}")
+        print(f"X[0] shape: {self.X[0].shape}")
         # self.X = th.zeros((self.T+1, self.n)).to(self.device)
         with self:
             nom_output = self.model.generate(
                 input_ids=nom_input_ids,
                 attention_mask=nom_attention_mask,
-                max_new_tokens=1,
+                max_new_tokens=k,
                 return_dict_in_generate=True,
                 do_sample=False,
                 use_cache=False,
@@ -227,25 +262,37 @@ class LQRSteering:
                 # **model_generation_kwargs, #
             )
 
+        end_nom_time = time.perf_counter()
+
+        print(f"Nom rollout time: {end_nom_time - start_time}")
+        # print(f"X[0] shape after nom: {self.X[0].shape}")
+        
+
         nom_output_str = self.tokenizer.decode(nom_output.sequences[0], skip_special_tokens=True)
         print(f"nom_output: {nom_output_str}")
 
 
         
-        batch_size, seq_len = nom_input_ids.shape
-        position_ids = th.arange(seq_len, dtype=th.long, device=self.device)
-        position_ids = position_ids.unsqueeze(0).expand(batch_size, seq_len).to(self.device)
+        
 
-        position_embeddings = self.model.model.rotary_emb(hidden_states, position_ids)
+        if self.A is None:
+            batch_size, seq_len = nom_input_ids.shape
+            position_ids = th.arange(seq_len, dtype=th.long, device=self.device)
+            position_ids = position_ids.unsqueeze(0).expand(batch_size, seq_len).to(self.device)
 
-        wrapped_tfs_temp = [partial(lqr.new_llama_block_wrapper, tf, nom_attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
-        tfs_with_control_temp = [partial(lqr.transformerBlockControl, tf) for tf in wrapped_tfs_temp]
-        self.A, _ = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X)
+            position_embeddings = self.model.model.rotary_emb(hidden_states, position_ids)
+            wrapped_tfs_temp = [partial(lqr.new_llama_block_wrapper, tf, nom_attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
+            tfs_with_control_temp = [partial(lqr.transformerBlockControl, tf) for tf in wrapped_tfs_temp]
+            self.A, _ = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X[0]) # linearizing about first subtrajectory
+
+        lin_time = time.perf_counter()
+        print(f"Linearize time: {lin_time - end_nom_time}")
 
         print(self.A.device)
         self.K = lqr.time_varying_lqr(self.A, self.B, self.Q, self.R, self.Qf)
 
         self.mode = Mode.TRACKING
+        self.iter = 0
 
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
         input_ids = inputs["input_ids"]
@@ -254,7 +301,7 @@ class LQRSteering:
             output = self.model.generate(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-                max_new_tokens=1,
+                max_new_tokens=k,
                 return_dict_in_generate=True,
                 do_sample=False,
                 use_cache=False,
@@ -264,3 +311,57 @@ class LQRSteering:
 
         output_str = self.tokenizer.decode(output.sequences[0], skip_special_tokens=True)
         print(f"steered output: {output_str}")
+        
+        end_time = time.perf_counter()
+
+        print(f"Tracking time: {end_time - lin_time}")
+        print(f"Total time: {end_time - start_time}")
+
+
+    def track_traj(self, X_nom, prompt, k=1, sample=True, temp=0.7):
+        self.mode = Mode.COLLECTING
+
+        start_time = time.perf_counter()
+        self.X = [X_nom for i in range(k)]        
+
+
+        
+        self.mode = Mode.TRACKING
+        self.iter = 0
+
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        input_ids = inputs["input_ids"]
+        attention_mask = inputs["attention_mask"]
+
+        if self.A is None:
+            batch_size, seq_len = input_ids.shape
+            position_ids = th.arange(seq_len, dtype=th.long, device=self.device)
+            position_ids = position_ids.unsqueeze(0).expand(batch_size, seq_len).to(self.device)
+
+            position_embeddings = self.model.model.rotary_emb(hidden_states, position_ids)
+            wrapped_tfs_temp = [partial(lqr.new_llama_block_wrapper, tf, attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
+            tfs_with_control_temp = [partial(lqr.transformerBlockControl, tf) for tf in wrapped_tfs_temp]
+            self.A, _ = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X[0]) # linearizing about first subtrajectory
+            self.K = lqr.time_varying_lqr(self.A, self.B, self.Q, self.R, self.Qf)
+
+
+        with self: # I think just an elegant way to trigger __enter__ and __exit__ to manage hooks
+            output = self.model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=k,
+                return_dict_in_generate=True,
+                do_sample=sample,
+                temperature=temp if sample else None,
+                use_cache=False,
+                pad_token_id=self.tokenizer.eos_token_id,
+                # **model_generation_kwargs, #
+            )
+
+        output_str = self.tokenizer.decode(output.sequences[0], skip_special_tokens=True)
+        # print(f"steered output: {output_str}")
+        
+        end_time = time.perf_counter()
+
+        # print(f"Total time: {end_time - start_time}")
+        return output_str

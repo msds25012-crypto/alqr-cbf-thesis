@@ -1,5 +1,4 @@
 import torch as th
-from lpe.lpe.utils import Transformer
 import matplotlib.pyplot as plt
 
 
@@ -13,7 +12,7 @@ def linearize(tfs, T, m, X_nom):
 
     Args:
         f: dynamics function f(x,u) -> x_next
-        X_nom: nominal states (T+1, n)
+        X_nom: nominal states (T+1, k, n)
         U_nom: nominal controls (T, m)
 
     Returns:
@@ -92,8 +91,10 @@ def time_varying_lqr(A, B, Q, R, S_T):
     return K
 
 def transformerBlockControl(tf, x, u):
+    # print(f"if ousdfdsdfd: {x.shape}")
     x_next = tf(x)
-    x_next[:,-1,:] = x_next[:,-1,:] + u
+    # x_next[:,-1,:] = x_next[:,-1,:] + u # 4.40.2
+    x_next[...,-1,:] = x_next[...,-1,:] + u
     return x_next
 
 
@@ -102,6 +103,15 @@ def find_random_target(model, x0):
     for block in model.blocks:
         x = block(x)
     return x
+
+def llama_block_wrapper(block, attention_mask, position_ids, x):
+    x = x.unsqueeze(0)
+    # x = x
+    return block(x, attention_mask, position_ids)[0]
+
+def new_llama_block_wrapper(block, attention_mask, position_ids, position_embeddings, x): # 4.57
+    x = x.unsqueeze(0)
+    return block(x, attention_mask=attention_mask, position_ids=position_ids, position_embeddings=position_embeddings)[0]
 
 # Nonlinear dynamics example
 # def pendulum_dynamics(x, u, dt=0.05):
