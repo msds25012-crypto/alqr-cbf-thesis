@@ -59,16 +59,8 @@ class LQRSteering:
 
 
     def hook_steering(self, layer_idx, module, input, output):
-        # print(f"layer: {layer_idx}")
-        
-        # print(f"output.shape: {output.shape}")
-    # if (layer_idx > 0):
-        u_t = self.K[layer_idx]@(self.E[layer_idx]) # can be computed offline
-        # print(u_t)
 
-        # print(self.K[layer_idx-1])
-        # print(u_t)
-        # print(f"input shape: {input[0].shape}")
+        u_t = self.K[layer_idx]@(self.E[layer_idx]) # can be computed offline
         self.U[layer_idx] = u_t
         self.X[layer_idx] = input[0][0,-1,:]
 
@@ -97,8 +89,6 @@ class LQRSteering:
             )
 
     def hook_collector(self, layer_idx, module, input, output):
-        # print("Collecting...")
-        # self.X[self.iter][layer_idx] = input[0][0,-1,:]
         if self.iter == 0:
             # print(f"iter in collector: {self.iter}")
             self.X[self.iter][layer_idx] = input[0]
@@ -133,40 +123,16 @@ class LQRSteering:
 
 
     def hook_tracking(self, layer_idx, module, input, output):
-        # print(f"layer: {layer_idx}")
-        
-        # print(f"output.shape: {output.shape}")
-    # if (layer_idx > 0):
-        # print("Tracking...")
-        # if self.iter == 0:
         x_t = input[0][0,-1,:]
-        # print(f"iter in tracking: {self.iter}")
-        # print(f"X[iter] shape in tracking: {self.X[self.iter].shape}")
-
         diff = x_t - self.X[self.iter][layer_idx,-1,:]
-            # u_t = -self.K[layer_idx]@(diff)
-
-        # else:
-        #     x_t = input[0][0,-1,:]
-        #     # print(f"iter in tracking: {self.iter}")
-        #     # print(f"X[iter] shape in tracking: {self.X[self.iter].shape}")
-
-        #     diff = x_t - self.X[self.iter][layer_idx,0,:]
         u_t = -self.K[layer_idx]@(diff)
-        # print(u_t)
 
-        # print(self.K[layer_idx-1])
-        # print(u_t)
-        # print(f"input shape: {input[0].shape}")
-        # print(f"u_t shape: {u_t.shape}")
         self.U[layer_idx] = u_t
-        # self.X[layer_idx] = input[0][0,-1,:]
 
         # output[0][:,-1,:] = output[0][:,-1,:] + u_t # 4.40
         output[0][...,-1,:] = output[0][...,-1,:] + u_t # new
 
         if (layer_idx == self.T-1):
-            # self.X[self.iter][self.T] = output[0][...,-1,:] + u_t
             self.iter = self.iter + 1
         return output
     
@@ -211,9 +177,6 @@ class LQRSteering:
         attention_mask = inputs["attention_mask"]
         self.X = th.zeros((self.T+1, self.n)).to(self.device)
 
-        # print(f"ids: {input_ids.device}")
-        # print(f"ids shape: {input_ids.shape}")
-        # print(f"mask: {attention_mask.device}")
         with self: # I think just an elegant way to trigger __enter__ and __exit__ to manage hooks
             output = self.model.generate(
                 input_ids=input_ids,
@@ -270,10 +233,6 @@ class LQRSteering:
 
         nom_output_str = self.tokenizer.decode(nom_output.sequences[0], skip_special_tokens=True)
         print(f"nom_output: {nom_output_str}")
-
-
-        
-        
 
         if self.A is None:
             batch_size, seq_len = nom_input_ids.shape
@@ -338,6 +297,8 @@ class LQRSteering:
             position_ids = th.arange(seq_len, dtype=th.long, device=self.device)
             position_ids = position_ids.unsqueeze(0).expand(batch_size, seq_len).to(self.device)
 
+            embedding_layer = self.model.get_input_embeddings()
+            hidden_states = embedding_layer(input_ids)
             position_embeddings = self.model.model.rotary_emb(hidden_states, position_ids)
             wrapped_tfs_temp = [partial(lqr.new_llama_block_wrapper, tf, attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
             tfs_with_control_temp = [partial(lqr.transformerBlockControl, tf) for tf in wrapped_tfs_temp]

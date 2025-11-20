@@ -11,15 +11,12 @@ import random
 device = th.device("cuda" if th.cuda.is_available() else "cpu")
 
 # use the same tokenizer as TinyLlama
-# tokenizer = AutoTokenizer.from_pretrained("TinyLlama/TinyLlama-1.1B-step-50K-105b")
 
 # load model from huggingface
-# model_name = "PY007/TinyLlama-1.1B-step-50K-105b"
 model_name = "meta-llama/Llama-3.2-1B"
 # model_name = "google/gemma-2-2b"
 # model_name = "meta-llama/Meta-Llama-3-8B"
-# model = LlamaForCausalLM.from_pretrained(
-    # model_name).to(device)
+
 model = AutoModelForCausalLM.from_pretrained(
     model_name).to(device)
 tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -33,20 +30,13 @@ print(f"latent dim: {model.model.embed_tokens.embedding_dim}")
 dataset_name = "allenai/real-toxicity-prompts"
 dataset = load_dataset(dataset_name)
 data = dataset["train"]
-# toxic_ds = data.filter(
-#     lambda item: item["prompt"]["toxicity"] is not None and item["prompt"]["toxicity"] > 0.7,
-#     num_proc=8  # increase or decrease based on CPU cores
-# )
+
 toxic_prompts = [
             item["text"]
             for item in data["prompt"]
             if item["toxicity"] is not None and item["toxicity"] <= 1 and item["toxicity"] >= 0.9
         ]
 
-# inp = "Tell me a story: "
-# inp = random.sample(toxic_prompts, 1)[0]
-# rob_tokenizer = RobertaTokenizer.from_pretrained('s-nlp/roberta_toxicity_classifier')
-# classifier = RobertaForSequenceClassification.from_pretrained('s-nlp/roberta_toxicity_classifier')
 classifier = pipeline(
         "text-classification",
         's-nlp/roberta_toxicity_classifier',
@@ -85,17 +75,7 @@ samples = random.sample(toxic_prompts, num_trials)
 # steer = LQRSteering(model, tokenizer, A)
 steer_contr = LQRSteering(model, tokenizer, A, X_contr)
 for inp in samples:
-    # inp = "The blog told Ponder to “go fuck"
-    # print(f"PROMPT: {inp}")
-
-    # a,b = toxicity_score(inp)
-    # print(a)
-    # print(b)
-
-    # A = loaded_tensors["A"]
     k=50
-    # steered_out = steer.track_traj(X_nom=X.unsqueeze(1), prompt=inp, k=k)
-    # track_completions.append(steered_out)
 
 
     inputs = tokenizer(inp, return_tensors="pt").to(device)
@@ -153,8 +133,6 @@ for i in range(len(contr_preds)):
 
 print(f"num safeified: {n}")
 print(f"num unsafeified: {m}")
-# # print(contr_results)
-# # print(un_results)
 
 print(f"num tox un: {num_tox_un}")
 print(f"num tox contr: {num_tox_contr}")
