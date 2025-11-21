@@ -26,7 +26,7 @@ class LQRSteering:
         q: float = 10,
         r: float = 10,
         qf: float = 1,
-        A: th.Tensor = None,
+        A: th.Tensor = None,    
         contrastive_vecs: th.Tensor = None,
     ):
         self.model = model
@@ -59,8 +59,16 @@ class LQRSteering:
 
 
     def hook_steering(self, layer_idx, module, input, output):
-
+        # print(f"layer: {layer_idx}")
+        
+        # print(f"output.shape: {output.shape}")
+    # if (layer_idx > 0):
         u_t = self.K[layer_idx]@(self.E[layer_idx]) # can be computed offline
+        # print(u_t)
+
+        # print(self.K[layer_idx-1])
+        # print(u_t)
+        # print(f"input shape: {input[0].shape}")
         self.U[layer_idx] = u_t
         self.X[layer_idx] = input[0][0,-1,:]
 
@@ -89,6 +97,8 @@ class LQRSteering:
             )
 
     def hook_collector(self, layer_idx, module, input, output):
+        # print("Collecting...")
+        # self.X[self.iter][layer_idx] = input[0][0,-1,:]
         if self.iter == 0:
             # print(f"iter in collector: {self.iter}")
             self.X[self.iter][layer_idx] = input[0]
@@ -123,16 +133,27 @@ class LQRSteering:
 
 
     def hook_tracking(self, layer_idx, module, input, output):
+        # print(f"layer: {layer_idx}")
+        
+        # print(f"output.shape: {output.shape}")
+    # if (layer_idx > 0):
+        # print("Tracking...")
+        # if self.iter == 0:
         x_t = input[0][0,-1,:]
-        diff = x_t - self.X[self.iter][layer_idx,-1,:]
-        u_t = -self.K[layer_idx]@(diff)
+        # print(f"iter in tracking: {self.iter}")
+        # print(f"X[iter] shape in tracking: {self.X[self.iter].shape}")
 
+        diff = x_t - self.X[self.iter][layer_idx,-1,:]
+            # u_t = -self.K[layer_idx]@(diff)
+        u_t = -self.K[layer_idx]@(diff)
         self.U[layer_idx] = u_t
+        # self.X[layer_idx] = input[0][0,-1,:]
 
         # output[0][:,-1,:] = output[0][:,-1,:] + u_t # 4.40
         output[0][...,-1,:] = output[0][...,-1,:] + u_t # new
 
         if (layer_idx == self.T-1):
+            # self.X[self.iter][self.T] = output[0][...,-1,:] + u_t
             self.iter = self.iter + 1
         return output
     
@@ -177,6 +198,9 @@ class LQRSteering:
         attention_mask = inputs["attention_mask"]
         self.X = th.zeros((self.T+1, self.n)).to(self.device)
 
+        # print(f"ids: {input_ids.device}")
+        # print(f"ids shape: {input_ids.shape}")
+        # print(f"mask: {attention_mask.device}")
         with self: # I think just an elegant way to trigger __enter__ and __exit__ to manage hooks
             output = self.model.generate(
                 input_ids=input_ids,
@@ -210,20 +234,21 @@ class LQRSteering:
         self.X = self.X + sublist
         self.iter = 0
 
-        print(f"len X: {len(self.X)}")
-        print(f"X[0] shape: {self.X[0].shape}")
+        # print(f"len X: {len(self.X)}")
+        # print(f"X[0] shape: {self.X[0].shape}")
         # self.X = th.zeros((self.T+1, self.n)).to(self.device)
         with self:
-            nom_output = self.model.generate(
-                input_ids=nom_input_ids,
-                attention_mask=nom_attention_mask,
-                max_new_tokens=k,
-                return_dict_in_generate=True,
-                do_sample=False,
-                use_cache=False,
-                pad_token_id=self.tokenizer.eos_token_id,
-                # **model_generation_kwargs, #
-            )
+            with th.no_grad():
+                nom_output = self.model.generate(
+                    input_ids=nom_input_ids,
+                    attention_mask=nom_attention_mask,
+                    max_new_tokens=k,
+                    return_dict_in_generate=True,
+                    do_sample=False,
+                    use_cache=False,
+                    pad_token_id=self.tokenizer.eos_token_id,
+                    # **model_generation_kwargs, #
+                )
 
         end_nom_time = time.perf_counter()
 
@@ -232,7 +257,11 @@ class LQRSteering:
         
 
         nom_output_str = self.tokenizer.decode(nom_output.sequences[0], skip_special_tokens=True)
-        print(f"nom_output: {nom_output_str}")
+        print(f"nom_output: {nom_output_str}<END>")
+
+
+        
+        
 
         if self.A is None:
             batch_size, seq_len = nom_input_ids.shape
@@ -257,16 +286,17 @@ class LQRSteering:
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
         with self: # I think just an elegant way to trigger __enter__ and __exit__ to manage hooks
-            output = self.model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=k,
-                return_dict_in_generate=True,
-                do_sample=False,
-                use_cache=False,
-                pad_token_id=self.tokenizer.eos_token_id,
-                # **model_generation_kwargs, #
-            )
+            with th.no_grad():
+                output = self.model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    max_new_tokens=k,
+                    return_dict_in_generate=True,
+                    do_sample=False,
+                    use_cache=False,
+                    pad_token_id=self.tokenizer.eos_token_id,
+                    # **model_generation_kwargs, #
+                )
 
         output_str = self.tokenizer.decode(output.sequences[0], skip_special_tokens=True)
         print(f"steered output: {output_str}")
@@ -275,9 +305,10 @@ class LQRSteering:
 
         print(f"Tracking time: {end_time - lin_time}")
         print(f"Total time: {end_time - start_time}")
+        return output_str
 
 
-    def track_traj(self, X_nom, prompt, k=1, sample=True, temp=0.7):
+    def track_traj(self, X_nom, prompt, k=1, do_sample=False, temp=0.7):
         self.mode = Mode.COLLECTING
 
         start_time = time.perf_counter()
@@ -293,12 +324,12 @@ class LQRSteering:
         attention_mask = inputs["attention_mask"]
 
         if self.A is None:
+            embedding_layer = self.model.get_input_embeddings()
+            hidden_states = embedding_layer(input_ids)
             batch_size, seq_len = input_ids.shape
             position_ids = th.arange(seq_len, dtype=th.long, device=self.device)
             position_ids = position_ids.unsqueeze(0).expand(batch_size, seq_len).to(self.device)
 
-            embedding_layer = self.model.get_input_embeddings()
-            hidden_states = embedding_layer(input_ids)
             position_embeddings = self.model.model.rotary_emb(hidden_states, position_ids)
             wrapped_tfs_temp = [partial(lqr.new_llama_block_wrapper, tf, attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
             tfs_with_control_temp = [partial(lqr.transformerBlockControl, tf) for tf in wrapped_tfs_temp]
@@ -307,17 +338,18 @@ class LQRSteering:
 
 
         with self: # I think just an elegant way to trigger __enter__ and __exit__ to manage hooks
-            output = self.model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=k,
-                return_dict_in_generate=True,
-                do_sample=sample,
-                temperature=temp if sample else None,
-                use_cache=False,
-                pad_token_id=self.tokenizer.eos_token_id,
-                # **model_generation_kwargs, #
-            )
+            with th.no_grad():
+                output = self.model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    max_new_tokens=k,
+                    return_dict_in_generate=True,
+                    do_sample=do_sample,
+                    temperature=temp if do_sample else None,
+                    use_cache=False,
+                    pad_token_id=self.tokenizer.eos_token_id,
+                    # **model_generation_kwargs, #
+                )
 
         output_str = self.tokenizer.decode(output.sequences[0], skip_special_tokens=True)
         # print(f"steered output: {output_str}")
@@ -326,3 +358,71 @@ class LQRSteering:
 
         # print(f"Total time: {end_time - start_time}")
         return output_str
+
+    def complete_rollout(self, prompt, k=1):
+        self.mode = Mode.COLLECTING
+        
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        input_ids = inputs["input_ids"]
+        attention_mask = inputs["attention_mask"].float()
+        embedding_layer = self.model.get_input_embeddings()
+        hidden_states = embedding_layer(input_ids)
+        self.X = [th.zeros_like(hidden_states).repeat(self.T+1, 1, 1).to(self.device)]
+        
+        sublist = [th.zeros_like(hidden_states[...,-1,:]).repeat(self.T+1, 1, 1).to(self.device) for i in range(k-1)]
+        self.X = self.X + sublist
+
+        with self: # I think just an elegant way to trigger __enter__ and __exit__ to manage hooks
+            with th.no_grad():
+                output = self.model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    max_new_tokens=k,
+                    return_dict_in_generate=True,
+                    do_sample=False,
+                    use_cache=False,
+                    pad_token_id=self.tokenizer.eos_token_id,
+                    # **model_generation_kwargs, #
+                )
+
+        batch_size, seq_len = input_ids.shape
+        position_ids = th.arange(seq_len, dtype=th.long, device=self.device)
+        position_ids = position_ids.unsqueeze(0).expand(batch_size, seq_len).to(self.device)
+
+        position_embeddings = self.model.model.rotary_emb(hidden_states, position_ids)
+        wrapped_tfs_temp = [partial(lqr.new_llama_block_wrapper, tf, attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
+        tfs_with_control_temp = [partial(lqr.transformerBlockControl, tf) for tf in wrapped_tfs_temp]
+        
+        self.A = [th.eye(self.n).unsqueeze(0).repeat(self.T, 1, 1).to(self.device) for i in range (k)]
+        for i in range(k):
+            self.A[i], _ = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X[i])
+        
+        return self.X, self.A, output
+
+    def plot_unorms(self, figname):
+        u_norms = th.linalg.norm(self.U, dim=1).cpu()
+        contr_norms = th.linalg.norm(self.E, dim=1).cpu()
+
+        layer_lbls = []
+        for i in range(self.T):
+            layer_lbls.append(f"{i+1}")
+        import matplotlib.pyplot as plt
+
+        bar_width = 0.35
+
+        # Set the x-axis positions for the bars
+        r1 = th.arange(len(layer_lbls))
+        r2 = [x + bar_width for x in r1]
+
+        # Create the bar plot
+        plt.bar(r1, u_norms, color='skyblue', width=bar_width, label='LQR')
+        plt.bar(r2, contr_norms[:-1], color='lightcoral', width=bar_width, label='Contrastive')
+
+        # Add labels and title
+        # plt.xlabel('')
+        plt.ylabel('Avg. Norm')
+        plt.title('Perturbation norms for final pass?')
+        plt.xticks([r + bar_width / 2 for r in r1], layer_lbls) # Center x-axis labels
+        plt.legend()
+        plt.tight_layout() # Adjust layout to prevent labels from overlapping
+        plt.savefig(figname + ".png")
