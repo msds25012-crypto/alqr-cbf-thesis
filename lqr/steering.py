@@ -10,6 +10,7 @@ class Mode(Enum):
     COLLECTING = 0
     TRACKING = 1
     STEERING = 2
+    SETPOINT = 3
 
 class LQRSteering:
     '''
@@ -17,8 +18,6 @@ class LQRSteering:
         - jacobians (A)
         - contrastive vectors
     '''
-
-
     def __init__(
         self,
         model: AutoModelForCausalLM,
@@ -52,27 +51,22 @@ class LQRSteering:
         self.X = None # to allocate at runtime
         self.U = th.zeros((self.T, self.n), device=self.device)
 
+        self.betas = None
+        self.E_unit = None
+
         self.hooks = []
         self.mode = Mode.COLLECTING
+        
 
         self.iter = 0
 
 
     def hook_steering(self, layer_idx, module, input, output):
-        # print(f"layer: {layer_idx}")
-        
-        # print(f"output.shape: {output.shape}")
-    # if (layer_idx > 0):
         u_t = self.K[layer_idx]@(self.E[layer_idx]) # can be computed offline
-        # print(u_t)
 
-        # print(self.K[layer_idx-1])
-        # print(u_t)
-        # print(f"input shape: {input[0].shape}")
         self.U[layer_idx] = u_t
         self.X[layer_idx] = input[0][0,-1,:]
 
-        # output[0][:,-1,:] = output[0][:,-1,:] + u_t # 4.40
         output[0][...,-1,:] = output[0][...,-1,:] + u_t # new
 
         if (layer_idx == self.T-1):
@@ -97,14 +91,10 @@ class LQRSteering:
             )
 
     def hook_collector(self, layer_idx, module, input, output):
-        # print("Collecting...")
-        # self.X[self.iter][layer_idx] = input[0][0,-1,:]
         if self.iter == 0:
-            # print(f"iter in collector: {self.iter}")
             self.X[self.iter][layer_idx] = input[0]
             if layer_idx == self.T-1:
                 self.X[self.iter][self.T] = output[0]
-                # self.X[self.iter][self.T] = output[0][...,-1,:]
                 self.iter = self.iter + 1
 
         else: # for everything other than the first layer, only collect last token position 
@@ -133,27 +123,15 @@ class LQRSteering:
 
 
     def hook_tracking(self, layer_idx, module, input, output):
-        # print(f"layer: {layer_idx}")
-        
-        # print(f"output.shape: {output.shape}")
-    # if (layer_idx > 0):
-        # print("Tracking...")
-        # if self.iter == 0:
         x_t = input[0][0,-1,:]
-        # print(f"iter in tracking: {self.iter}")
-        # print(f"X[iter] shape in tracking: {self.X[self.iter].shape}")
 
         diff = x_t - self.X[self.iter][layer_idx,-1,:]
-            # u_t = -self.K[layer_idx]@(diff)
         u_t = -self.K[layer_idx]@(diff)
         self.U[layer_idx] = u_t
-        # self.X[layer_idx] = input[0][0,-1,:]
 
-        # output[0][:,-1,:] = output[0][:,-1,:] + u_t # 4.40
         output[0][...,-1,:] = output[0][...,-1,:] + u_t # new
 
         if (layer_idx == self.T-1):
-            # self.X[self.iter][self.T] = output[0][...,-1,:] + u_t
             self.iter = self.iter + 1
         return output
     
@@ -173,6 +151,38 @@ class LQRSteering:
                 )
             )
 
+    def hook_setpoint_tracking(self, layer_idx, module, input, output):
+        x = input[0][0,-1,:]
+        self.X[layer_idx] = x
+        v = self.E_unit[layer_idx]
+        alpha = self.betas[layer_idx] - th.dot(v, x).item()
+
+        e = alpha * v
+        u_t = self.K[layer_idx]@e
+        self.U[layer_idx] = u_t
+
+        output[0][...,-1,:] = output[0][...,-1,:] + u_t
+
+        if (layer_idx == self.T-1):
+            self.X[self.T] = output[0][...,-1,:] + u_t
+        return output
+
+    def register_setpoint_tracking_hooks(self):
+        """Register the hooks."""
+
+        for layer_idx, layer in enumerate(self.model.model.layers):
+            def hook_wrapper(layer_idx):
+                def hook(module, input, output):
+                    return self.hook_setpoint_tracking(layer_idx, module, input, output)
+
+                return hook
+
+            self.hooks.append(
+                layer.register_forward_hook(
+                    hook_wrapper(layer_idx)
+                )
+            )
+
     def remove_hooks(self):
         for hook in self.hooks:
             hook.remove()
@@ -183,8 +193,10 @@ class LQRSteering:
             self.register_collection_hooks()
         elif self.mode == Mode.STEERING:
             self.register_steering_hooks()
-        else: 
+        elif self.mode == Mode.TRACKING: 
             self.register_tracking_hooks()
+        elif self.mode == Mode.SETPOINT:
+            self.register_setpoint_tracking_hooks()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -216,6 +228,39 @@ class LQRSteering:
 
         output_str = self.tokenizer.decode(output.sequences[0], skip_special_tokens=True)
         return output_str
+
+    def track_setpoint(self, prompt, max_new_tokens, lmbda=1, do_sample=False, temp=0.7):
+        self.mode = Mode.SETPOINT
+
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        input_ids = inputs["input_ids"]
+        attention_mask = inputs["attention_mask"]
+        self.X = th.zeros((self.T+1, self.n)).to(self.device)
+
+        self.E_unit = th.zeros_like(self.E)
+        self.betas = [0 for i in range(self.T+1)]
+        for i, e in enumerate(self.E):
+            # print(f"e: {e}")
+            nrm = th.linalg.norm(e)
+            self.E_unit[i] = e / nrm
+            self.betas[i] = lmbda * nrm
+
+        with self:
+            output = self.model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=max_new_tokens,
+                return_dict_in_generate=True,
+                do_sample=do_sample,
+                temperature=temp,
+                use_cache=False,
+                pad_token_id=self.tokenizer.eos_token_id,
+                # **model_generation_kwargs, #
+            )
+
+        output_str = self.tokenizer.decode(output.sequences[0], skip_special_tokens=True)
+        return output_str
+        
 
     def track_tokens(self, nom_prompt, prompt, k=1):
         self.mode = Mode.COLLECTING
@@ -259,10 +304,6 @@ class LQRSteering:
         nom_output_str = self.tokenizer.decode(nom_output.sequences[0], skip_special_tokens=True)
         print(f"nom_output: {nom_output_str}<END>")
 
-
-        
-        
-
         if self.A is None:
             batch_size, seq_len = nom_input_ids.shape
             position_ids = th.arange(seq_len, dtype=th.long, device=self.device)
@@ -299,7 +340,7 @@ class LQRSteering:
                 )
 
         output_str = self.tokenizer.decode(output.sequences[0], skip_special_tokens=True)
-        print(f"steered output: {output_str}")
+        # print(f"steered output: {output_str}")
         
         end_time = time.perf_counter()
 
@@ -314,8 +355,6 @@ class LQRSteering:
         start_time = time.perf_counter()
         self.X = [X_nom for i in range(k)]        
 
-
-        
         self.mode = Mode.TRACKING
         self.iter = 0
 
