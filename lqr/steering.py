@@ -18,6 +18,8 @@ class LQRSteering:
         - jacobians (A)
         - contrastive vectors
     '''
+
+
     def __init__(
         self,
         model: AutoModelForCausalLM,
@@ -62,11 +64,20 @@ class LQRSteering:
 
 
     def hook_steering(self, layer_idx, module, input, output):
+        # print(f"layer: {layer_idx}")
+        
+        # print(f"output.shape: {output.shape}")
+    # if (layer_idx > 0):
         u_t = self.K[layer_idx]@(self.E[layer_idx]) # can be computed offline
+        # print(u_t)
 
+        # print(self.K[layer_idx-1])
+        # print(u_t)
+        # print(f"input shape: {input[0].shape}")
         self.U[layer_idx] = u_t
         self.X[layer_idx] = input[0][0,-1,:]
 
+        # output[0][:,-1,:] = output[0][:,-1,:] + u_t # 4.40
         output[0][...,-1,:] = output[0][...,-1,:] + u_t # new
 
         if (layer_idx == self.T-1):
@@ -91,10 +102,14 @@ class LQRSteering:
             )
 
     def hook_collector(self, layer_idx, module, input, output):
+        # print("Collecting...")
+        # self.X[self.iter][layer_idx] = input[0][0,-1,:]
         if self.iter == 0:
+            # print(f"iter in collector: {self.iter}")
             self.X[self.iter][layer_idx] = input[0]
             if layer_idx == self.T-1:
                 self.X[self.iter][self.T] = output[0]
+                # self.X[self.iter][self.T] = output[0][...,-1,:]
                 self.iter = self.iter + 1
 
         else: # for everything other than the first layer, only collect last token position 
@@ -127,11 +142,13 @@ class LQRSteering:
 
         diff = x_t - self.X[self.iter][layer_idx,-1,:]
         u_t = -self.K[layer_idx]@(diff)
+        # u_t = -(diff)
         self.U[layer_idx] = u_t
 
         output[0][...,-1,:] = output[0][...,-1,:] + u_t # new
 
         if (layer_idx == self.T-1):
+            # self.X[self.iter][self.T] = output[0][...,-1,:] + u_t
             self.iter = self.iter + 1
         return output
     
@@ -152,19 +169,43 @@ class LQRSteering:
             )
 
     def hook_setpoint_tracking(self, layer_idx, module, input, output):
-        x = input[0][0,-1,:]
-        self.X[layer_idx] = x
+        # assume E_normed is unit vector in direction of contrastive feature
+        # print(f"input len: {len(input)}")
+        # print(f"input[0] shape: {input[0].shape}")
+        x = input[0][:,-1,:]
+        # print(f"x shape: {x.shape}")
+        self.X[layer_idx] = x[-1,:]
         v = self.E_unit[layer_idx]
-        alpha = self.betas[layer_idx] - th.dot(v, x).item()
+        # print(f"v: {v.shape}")
+        # print(f"v device: {v.device}")
+        # print(f"dot: {th.dot(v, x)}")
 
-        e = alpha * v
-        u_t = self.K[layer_idx]@e
-        self.U[layer_idx] = u_t
+        # alpha = self.betas[layer_idx] - th.dot(v, x).item() # unbatched
+        alpha = th.tensor([self.betas[layer_idx] for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
+        # print(f"alpha: {alpha.shape}")
+        # print(f"beta: {self.betas[layer_idx]}")
 
-        output[0][...,-1,:] = output[0][...,-1,:] + u_t
+        # print(f"v: {v.shape}")
+        e = alpha.squeeze(0).T @ v.unsqueeze(0)
+        # print(f"e: {e.shape}")
+        # u_t = self.K[layer_idx]@e # unbatched
+        u_t = th.bmm(self.K[layer_idx].unsqueeze(0), th.transpose(e.unsqueeze(0),-2,-1)).squeeze(0).T
+        # print(f"u_t: {u_t.shape}")
+        self.U[layer_idx] = u_t[-1]
+
+        # print(f"output[0]: {output[0].shape}")
+        # print(f"output: {output.shape}")
+        # output[0][...,-1,:] = output[0][...,-1,:] + u_t # unbatched (and also tuple)
+        if isinstance(output,tuple):
+            output[0][...,-1,:] = output[0][...,-1,:] + u_t
+        else: 
+            output[...,-1,:] = output[...,-1,:] + u_t
 
         if (layer_idx == self.T-1):
-            self.X[self.T] = output[0][...,-1,:] + u_t
+            if isinstance(output,tuple):
+                output[0][...,-1,:] = output[0][...,-1,:] + u_t # unbatched (and also tuple)
+            else: 
+                self.X[self.T] = output[-1,-1,:]
         return output
 
     def register_setpoint_tracking_hooks(self):
@@ -232,7 +273,13 @@ class LQRSteering:
     def track_setpoint(self, prompt, max_new_tokens, lmbda=1, do_sample=False, temp=0.7):
         self.mode = Mode.SETPOINT
 
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        # inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        inputs = self.tokenizer(
+            prompt, 
+            return_tensors="pt", 
+            padding=True,
+            truncation=True,
+        ).to(self.device)
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
         self.X = th.zeros((self.T+1, self.n)).to(self.device)
@@ -258,7 +305,8 @@ class LQRSteering:
                 # **model_generation_kwargs, #
             )
 
-        output_str = self.tokenizer.decode(output.sequences[0], skip_special_tokens=True)
+        # output_str = self.tokenizer.decode(output.sequences[0], skip_special_tokens=True)
+        output_str = self.tokenizer.batch_decode(output.sequences, skip_special_tokens=True)
         return output_str
         
 
@@ -303,6 +351,10 @@ class LQRSteering:
 
         nom_output_str = self.tokenizer.decode(nom_output.sequences[0], skip_special_tokens=True)
         print(f"nom_output: {nom_output_str}<END>")
+
+
+        
+        
 
         if self.A is None:
             batch_size, seq_len = nom_input_ids.shape
@@ -355,6 +407,8 @@ class LQRSteering:
         start_time = time.perf_counter()
         self.X = [X_nom for i in range(k)]        
 
+
+        
         self.mode = Mode.TRACKING
         self.iter = 0
 
