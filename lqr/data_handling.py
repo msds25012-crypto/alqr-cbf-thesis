@@ -1,11 +1,12 @@
 import torch as th
 import transformers
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 import lqr_utils_seq as lqr
 from functools import partial
 from datasets import load_dataset
 import random
 import pickle
+import time
 
 class ContrastiveBuilder:
     def __init__(
@@ -26,6 +27,7 @@ class ContrastiveBuilder:
         print(f"Latent dim: {self.n}")
         self.A_sum = th.zeros((self.T, self.n, self.n,)).to(self.device)
         self.X_sum = th.zeros((self.T+1, self.n,)).to(self.device)
+        self.X_mean = th.zeros((self.T+1, self.n,)).to(self.device)
 
         self.X = None # to allocate at runtime -- dependent on input length
 
@@ -100,7 +102,7 @@ class ContrastiveBuilder:
 
         self.A_sum = self.A_sum + A
 
-    def collect_data(self, num_samples, num_tokens, trait, filename, lb=0, ub=0.1, split="train"):
+    def collect_data(self, num_samples, num_tokens, trait, filename, lb=0, ub=0.1, split="train", collect_A = False):#, num_A = 1):
         data = self.dataset[split]
         filtered_data = [
             item["text"]
@@ -108,7 +110,7 @@ class ContrastiveBuilder:
             if item[trait] is not None and item[trait] <= ub and item[trait] >= lb
         ]
 
-        
+        # A_iter = num_A
         sample = random.sample(filtered_data, num_samples)
         for prompt in sample:
             inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
@@ -131,119 +133,85 @@ class ContrastiveBuilder:
             
             self.X_sum = self.X_sum + self.X[:,-1,:]
 
-            # batch_size, seq_len = input_ids.shape
-            # position_ids = th.arange(seq_len, dtype=th.long, device=self.device)
-            # position_ids = position_ids.unsqueeze(0).expand(batch_size, seq_len).to(device)
 
-            # position_embeddings = self.model.model.rotary_emb(hidden_states, position_ids)
+            if collect_A:# and A_iter > 0:
+                batch_size, seq_len = input_ids.shape
+                position_ids = th.arange(seq_len, dtype=th.long, device=self.device)
+                position_ids = position_ids.unsqueeze(0).expand(batch_size, seq_len).to(device)
 
-            # wrapped_tfs_temp = [partial(lqr.new_llama_block_wrapper, tf, attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
-            # tfs_with_control_temp = [partial(lqr.transformerBlockControl, tf) for tf in wrapped_tfs_temp]
-            # A, _ = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X)
-            # self.A_sum = self.A_sum + A
+                position_embeddings = self.model.model.rotary_emb(hidden_states, position_ids)
+
+                wrapped_tfs_temp = [partial(lqr.new_llama_block_wrapper, tf, attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
+                tfs_with_control_temp = [partial(lqr.transformerBlockControl, tf) for tf in wrapped_tfs_temp]
+                A, _ = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X)
+                self.A_sum = self.A_sum + A
+                # A_iter -= 1
 
 
         total = num_samples*num_tokens
         print(f"total: {total}")
-        tensor_dict = {
-            "X": self.X_sum / total,
-            "A": self.A_sum / total
-        }
-
+        if collect_A:
+            tensor_dict = {
+                "X": self.X_sum / total,
+                "A": self.A_sum / total,
+            } 
+        else:
+            tensor_dict = {
+                "X": self.X_sum / total,
+            } 
 
         with open("../../scratch/" + filename + ".pkl", "wb") as f:
             pickle.dump(tensor_dict, f)
 
-    
 
 
 
 device = th.device("cuda" if th.cuda.is_available() else "cpu")
 # use the same tokenizer as TinyLlama
 
-model_name = "meta-llama/Llama-3.2-1B"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(
-    model_name).to(device)
+# model_name = "meta-llama/Llama-3.2-1B"
+# model_name = "google/gemma-2-2b"
+# model_name = "Qwen/Qwen2.5-3B"
+model_name = "meta-llama/Meta-Llama-3-8B"
 
+
+quant_config = BitsAndBytesConfig(
+    # load_in_4bit=True,          # or load_in_8bit=True
+    load_in_8bit=True,
+    bnb_4bit_compute_dtype=th.float16,
+    bnb_4bit_quant_type="nf4",  # best for LLMs
+    bnb_4bit_use_double_quant=True,
+)
+model = AutoModelForCausalLM.from_pretrained(
+    model_name, quantization_config=quant_config, dtype=th.float32, device_map="auto")
+
+
+tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
+tokenizer.pad_token = tokenizer.eos_token
+tokenizer.pad_token_id = tokenizer.eos_token_id
+
+# model = AutoModelForCausalLM.from_pretrained(
+#     model_name).to(device)
+tokenizer.pad_token = tokenizer.eos_token
+tokenizer.pad_token_id = tokenizer.eos_token_id
 dataset_name = "allenai/real-toxicity-prompts"
 dataguy = ContrastiveBuilder(model, tokenizer, dataset_name)
 
-filename = "llama-3.2-1b_tox"
-dataguy.collect_data(200, 1, "toxicity", filename, lb=0.8, ub=1)
+start_time = time.perf_counter()
+# filename = "llama-1b_batch_seq"
+filename = "llama-3-8b_nontox"
+dataguy.collect_data(120, 1, "toxicity", filename, lb=0.0, ub=0.1, collect_A=True)
+end_time = time.perf_counter()
 
 with open("../../scratch/" + filename + ".pkl", "rb") as f:
     loaded_tensors = pickle.load(f)
+print(f"seq time: {end_time - start_time}")
 
-# Access tensors
+# # Access tensors
 X = loaded_tensors["X"]
 A = loaded_tensors["A"]
-
-print(f"X loaded: {X}")
-print(f"A loaded: {A}")
-# data = dataset["train"]
+print(X)
+print(A)
 
 
-# # print(data["prompt"][0])
-# # non_toxic = [
-# #     item["text"]
-# #     for item in data["prompt"]
-# #     if item["toxicity"] is not None and item["toxicity"] < 0.1
-# # ]
-# non_toxic_ds = data.filter(
-#     lambda item: item["prompt"]["toxicity"] is not None and item["prompt"]["toxicity"] < 0.1,
-#     num_proc=8  # increase or decrease based on CPU cores
-# )
-# # print(non_toxic_ds[0])
-# non_toxic = [item["prompt"]["text"] for item in non_toxic_ds]
-
-# toxic_ds = data.filter(
-#     lambda item: item["prompt"]["toxicity"] is not None and item["prompt"]["toxicity"] > 0.7,
-#     num_proc=8  # increase or decrease based on CPU cores
-# )
-# # print(non_toxic_ds[0])
-# toxic = [item["prompt"]["text"] for item in toxic_ds]
-# print(len(toxic))
-
-# prompt = non_toxic[2342]
-# print(f"prompt: {prompt}")
-
-# inputs = tokenizer(prompt, return_tensors="pt").to(device)
-# input_ids = inputs["input_ids"]
-# attention_mask = inputs["attention_mask"]
-# output = model.generate(
-#                 input_ids=input_ids,
-#                 attention_mask=attention_mask,
-#                 max_new_tokens=15,
-#                 return_dict_in_generate=True,
-#                 do_sample=True,
-#                 temperature=0.7,
-#                 use_cache=False,
-#                 pad_token_id=tokenizer.eos_token_id,
-#                 # **model_generation_kwargs, #
-#             )
-
-# output_str = tokenizer.decode(output.sequences[0], skip_special_tokens=True)
-# print(output_str)
-
-
-# prompt = toxic[2121]
-# print(f"prompt: {prompt}")
-
-# inputs = tokenizer(prompt, return_tensors="pt").to(device)
-# input_ids = inputs["input_ids"]
-# attention_mask = inputs["attention_mask"]
-# output = model.generate(
-#                 input_ids=input_ids,
-#                 attention_mask=attention_mask,
-#                 max_new_tokens=15,
-#                 return_dict_in_generate=True,
-#                 do_sample=True,
-#                 temperature=0.7,
-#                 use_cache=False,
-#                 pad_token_id=tokenizer.eos_token_id,
-#                 # **model_generation_kwargs, #
-#             )
-
-# output_str = tokenizer.decode(output.sequences[0], skip_special_tokens=True)
-# print(output_str)
+##############################################

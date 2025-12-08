@@ -170,32 +170,15 @@ class LQRSteering:
 
     def hook_setpoint_tracking(self, layer_idx, module, input, output):
         # assume E_normed is unit vector in direction of contrastive feature
-        # print(f"input len: {len(input)}")
-        # print(f"input[0] shape: {input[0].shape}")
         x = input[0][:,-1,:]
-        # print(f"x shape: {x.shape}")
         self.X[layer_idx] = x[-1,:]
         v = self.E_unit[layer_idx]
-        # print(f"v: {v.shape}")
-        # print(f"v device: {v.device}")
-        # print(f"dot: {th.dot(v, x)}")
 
-        # alpha = self.betas[layer_idx] - th.dot(v, x).item() # unbatched
         alpha = th.tensor([self.betas[layer_idx] for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
-        # print(f"alpha: {alpha.shape}")
-        # print(f"beta: {self.betas[layer_idx]}")
-
-        # print(f"v: {v.shape}")
         e = alpha.squeeze(0).T @ v.unsqueeze(0)
-        # print(f"e: {e.shape}")
-        # u_t = self.K[layer_idx]@e # unbatched
         u_t = th.bmm(self.K[layer_idx].unsqueeze(0), th.transpose(e.unsqueeze(0),-2,-1)).squeeze(0).T
-        # print(f"u_t: {u_t.shape}")
         self.U[layer_idx] = u_t[-1]
 
-        # print(f"output[0]: {output[0].shape}")
-        # print(f"output: {output.shape}")
-        # output[0][...,-1,:] = output[0][...,-1,:] + u_t # unbatched (and also tuple)
         if isinstance(output,tuple):
             output[0][...,-1,:] = output[0][...,-1,:] + u_t
         else: 
