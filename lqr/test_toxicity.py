@@ -23,6 +23,7 @@ model_name = "google/gemma-2-2b"
 # model = LlamaForCausalLM.from_pretrained(
     # model_name).to(device)
 
+PKL_FILENAME = "../../pickle_jar/"
 
 # model = AutoModelForCausalLM.from_pretrained(
 #     model_name).to(device)
@@ -97,7 +98,7 @@ nontox_filename = "gemma-2-2b_nontox"
 # nontox_filename = "qwen2.5-3b_nontox"
 # nontox_filename = "llama-3.2-1b_nontox"
 # nontox_filename = "llama-3-8b_nontox"
-with open("../../scratch/"+nontox_filename+".pkl", "rb") as f:
+with open(PKL_FILENAME+nontox_filename+".pkl", "rb") as f:
     loaded_tensors = pickle.load(f)
 
 # Access tensors
@@ -110,7 +111,7 @@ tox_filename = "gemma-2-2b_tox"
 # tox_filename = "qwen2.5-3b_tox"
 # tox_filename = "llama-3-8b_tox"
 # tox_filename = "llama-3.2-1b_tox"
-with open("../../scratch/"+tox_filename+".pkl", "rb") as f:
+with open(PKL_FILENAME+tox_filename+".pkl", "rb") as f:
     loaded_tensors = pickle.load(f)
 
     # Access tensors
@@ -121,7 +122,7 @@ print(f"X contr: {X_contr.shape}")
 
 
 
-num_trials = 1000
+num_trials = 3
 samples = random.sample(toxic_prompts, num_trials)
 # steer = LQRSteering(model, tokenizer, A)
 
@@ -129,14 +130,19 @@ temp = 0.7
 start_time = time.perf_counter()
 
 
-q_list = [0.1, 1, 10, 100, 1000]
-r_list = [0.1, 1, 10, 100, 1000]
-qf_list = [0.1, 1, 10, 100, 1000]
+# q_list = [0.1, 1, 10, 100, 1000]
+q_list = [0.1]
+# r_list = [0.1, 1, 10, 100, 1000]
+r_list = [1]
+# qf_list = [0.1, 1, 10, 100, 1000]
+qf_list = [0.1]
+print("lambda,q,r,qf,num_safeified,num_unsafeified,num_tox_un,num_tox_contr,dist1_base,dist2_base,dist3_base,dist1_steered,dist2_steered,dist3_steered")
 for q in q_list:
     for r in r_list:
         for qf in qf_list:
             steer_contr = LQRSteering(model, tokenizer, q=q,r=r,qf=qf, A=A, contrastive_vecs=X_contr)
-            for l in [0.5, 1, 1.5, 2, 2.5]:
+            # for l in [0.5, 1, 1.5, 2, 2.5]:
+            for l in [1]:
                 track_completions = []
                 contr_completions = []
                 un_completions = []
@@ -174,9 +180,9 @@ for q in q_list:
                     un_completions.append(output_str[i][len(inp):].strip())
                     contr_completions.append(contr_out[i][len(inp):].strip())
                     
-                # print(f"PROMPT: {samples}")
-                # print(f"\nSteered output: {contr_out}")
-                # print(f"\nUnsteered output: {output_str}")
+                print(f"PROMPT: {samples}")
+                print(f"\nSteered output: {contr_out}")
+                print(f"\nUnsteered output: {output_str}")
 
                 contr_preds = classifier(contr_completions)
                 un_preds = classifier(un_completions)
@@ -209,7 +215,7 @@ for q in q_list:
                     if un_preds[i]["label"] == "toxic":
                         num_tox_un += 1
 
-                        
+                print(l,q,r,qf,n,m,num_tox_un,num_tox_contr,dist_1_base,dist_2_base,dist_3_base,dist_1_steered,dist_2_steered,dist_3_steered, sep=",")
                 print("\n\n\n\n\n\n\n\n")
                 print(f"num safeified: {n}")
                 print(f"num unsafeified: {m}")

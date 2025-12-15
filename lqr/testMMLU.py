@@ -6,6 +6,7 @@ import lqr_utils_seq as lqr
 from functools import partial
 import pickle
 from steering import LQRSteering
+from PIDsteering import PIDSteering
 from datasets import load_dataset
 import random
 import time
@@ -27,6 +28,7 @@ model_name = "google/gemma-2-2b"
 
 # model = AutoModelForCausalLM.from_pretrained(
 #     model_name).to(device)
+PKL_FILENAME = "../../pickle_jar/"
 tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
 tokenizer.pad_token = tokenizer.eos_token
 tokenizer.pad_token_id = tokenizer.eos_token_id
@@ -46,7 +48,7 @@ nontox_filename = "gemma-2-2b_nontox"
 # nontox_filename = "qwen2.5-3b_nontox"
 # nontox_filename = "llama-3.2-1b_nontox"
 # nontox_filename = "llama-3-8b_nontox"
-with open("../../scratch/"+nontox_filename+".pkl", "rb") as f:
+with open(PKL_FILENAME+nontox_filename+".pkl", "rb") as f:
     loaded_tensors = pickle.load(f)
 
 
@@ -59,7 +61,7 @@ tox_filename = "gemma-2-2b_tox"
 # tox_filename = "qwen2.5-3b_tox"
 # tox_filename = "llama-3-8b_tox"
 # tox_filename = "llama-3.2-1b_tox"
-with open("../../scratch/"+tox_filename+".pkl", "rb") as f:
+with open(PKL_FILENAME+tox_filename+".pkl", "rb") as f:
     loaded_tensors = pickle.load(f)
 
     # Access tensors
@@ -120,14 +122,14 @@ def build_5shot_prompt(dev_set, test_example, n_shots=N_SHOTS):
 
 N_PROMPTS = 100      # prompts per batch
 N_LOOP = 10         # number of batches
-BATCH_SIZE = 4      # how many to send to GPU at once
+BATCH_SIZE = 10      # how many to send to GPU at once
 N_SHOTS = 5
 do_sample = False
 temp = 0.7
 k=1
 lambda_list = [0.5, 1, 1.5, 2, 2.5]
-# lambda_list = [0.5]
-steer_contr = LQRSteering(model, tokenizer, q=0.1,r=1,qf=0.1, A=A, contrastive_vecs=X_contr)
+
+steer_contr = None
 
 def main():
     for l in lambda_list:
@@ -249,4 +251,10 @@ def main():
 
 
 if __name__ == "__main__":
+    # N_PROMPTS = 10      # prompts per batch
+    # N_LOOP = 1
+    # lambda_list = [0.5]
+    # steer_contr = LQRSteering(model, tokenizer, q=0.1,r=1,qf=0.1, A=A, contrastive_vecs=X_contr)
+    steer_contr = PIDSteering(model, tokenizer, kp=1,ki=0.01,kd=0.01, A=A, contrastive_vecs=X_contr)
+
     main()

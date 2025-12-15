@@ -5,6 +5,9 @@ import lqr_utils_seq as lqr
 from functools import partial
 from enum import Enum
 import time
+# import tqdm
+from tqdm import tqdm
+import torch.nn.functional as F
 
 class Mode(Enum):
     COLLECTING = 0
@@ -170,6 +173,7 @@ class LQRSteering:
 
     def hook_setpoint_tracking(self, layer_idx, module, input, output):
         # assume E_normed is unit vector in direction of contrastive feature
+        
         x = input[0][:,-1,:]
         self.X[layer_idx] = x[-1,:]
         v = self.E_unit[layer_idx]
@@ -502,3 +506,70 @@ class LQRSteering:
         plt.legend()
         plt.tight_layout() # Adjust layout to prevent labels from overlapping
         plt.savefig(figname + ".png")
+
+    def compute_ppl(self, data, lmbda=1, BATCH_SZ=10):
+
+        self.mode = Mode.SETPOINT
+        self.X = th.zeros((self.T+1, self.n)).to(self.device)
+
+        self.E_unit = th.zeros_like(self.E)
+        self.betas = [0 for i in range(self.T+1)]
+        for i, e in enumerate(self.E):
+            # print(f"e: {e}")
+            nrm = th.linalg.norm(e)
+            self.E_unit[i] = e / nrm
+            self.betas[i] = lmbda * nrm
+        print(f"betas= {self.betas}")
+        # model.eval()
+
+        total_nll = 0.0
+        total_tokens = 0
+
+        # for ind in tqdm(range(0, len(data), BATCH_SZ)):
+        for ind in tqdm(range(0, 10, BATCH_SZ)):
+            if not data[ind]:
+                continue
+
+            end_ind = min(ind + BATCH_SZ, len(data))
+
+            encodings = self.tokenizer(
+                data[ind:end_ind],
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=self.model.config.max_position_embeddings,
+            ).to(self.device)
+
+            input_ids = encodings["input_ids"]
+            attention_mask = encodings["attention_mask"]
+
+            with self:
+                with th.no_grad():
+                    outputs = self.model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        use_cache=False,
+                    )
+
+                    # Shift for causal LM
+                    shift_logits = outputs.logits[:, :-1, :]
+                    shift_labels = input_ids[:, 1:]
+                    shift_mask = attention_mask[:, 1:]
+
+                    # Token-level NLL (sum, not mean)
+                    loss = F.cross_entropy(
+                        shift_logits.reshape(-1, shift_logits.size(-1)),
+                        shift_labels.reshape(-1),
+                        ignore_index=self.tokenizer.pad_token_id,
+                        reduction="sum",
+                    )
+
+                    # Count valid tokens
+                    n_tokens = shift_mask.sum()
+
+                    total_nll += loss
+                    total_tokens += n_tokens
+
+        # Final perplexity (HF definition)
+        ppl = th.exp(total_nll / total_tokens)
+        return ppl
