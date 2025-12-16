@@ -173,7 +173,6 @@ class LQRSteering:
 
     def hook_setpoint_tracking(self, layer_idx, module, input, output):
         # assume E_normed is unit vector in direction of contrastive feature
-        
         x = input[0][:,-1,:]
         self.X[layer_idx] = x[-1,:]
         v = self.E_unit[layer_idx]
@@ -187,12 +186,6 @@ class LQRSteering:
             output[0][...,-1,:] = output[0][...,-1,:] + u_t
         else: 
             output[...,-1,:] = output[...,-1,:] + u_t
-
-        if (layer_idx == self.T-1):
-            if isinstance(output,tuple):
-                output[0][...,-1,:] = output[0][...,-1,:] + u_t # unbatched (and also tuple)
-            else: 
-                self.X[self.T] = output[-1,-1,:]
         return output
 
     def register_setpoint_tracking_hooks(self):
@@ -522,54 +515,99 @@ class LQRSteering:
         print(f"betas= {self.betas}")
         # model.eval()
 
-        total_nll = 0.0
+        prompts = None
+
+        self.tokenizer.padding_side = "right"
+        truncation = True
+        max_generation_length = 40
+        max_context_length = 128
+        # max_context_length = model.config.max_position_embeddings
+
+        print(f"number of sentences: {len(data)}")
+        BATCH_SZ = 10
+
+
+        nll_sum = th.zeros(1)
+        total = th.zeros(1)
+
+        tok_s = self.tokenizer(
+            text=data,
+            return_tensors="pt",
+            truncation=truncation,
+            padding=truncation,
+            max_length=max_generation_length,
+            add_special_tokens=(
+                prompts is None
+            ),  # if there is a prompt, it already contains BOS token
+        ).to(self.device)
+        self.tokenizer.padding_side = (
+            "left"  # go back to original padding (to not messup things)
+        )
+
+        if prompts is not None:
+            side = self.tokenizer.truncation_side
+            self.tokenizer.truncation_side = "left"
+            tok_p = self.tokenizer(
+                text=prompts,
+                return_tensors="pt",
+                truncation=truncation,
+                padding=True,
+                add_special_tokens=True,
+                max_length=max_context_length,
+            ).to(self.device)
+            self.tokenizer.truncation_side = side
+            tok_all = {k: th.cat([tok_p[k], tok_s[k]], -1) for k in tok_p.keys()}
+            offset = tok_p["input_ids"].shape[-1]
+        else:
+            tok_all = tok_s
+            offset = 1  # skips the BOS token
+
+        input_ids = tok_all["input_ids"]
+        # print(f"shape; {input_ids.shape}")
+        attention_mask = tok_all["attention_mask"]
+        # This is the number of tokens in each continuation. We will generate this amount of tokens, one by one.
+        attention_mask_sum = tok_s["attention_mask"].sum(-1)
+        # Buffer to keep track of ppls
+        ppls = th.zeros(attention_mask.shape[0], device=self.device, dtype=th.float32)
+        totals = th.zeros_like(ppls)
+
+        # # print(f"sequential ppl: {th.exp(nll_sum/ total)}")
+        total_loss = 0
         total_tokens = 0
-
-        # for ind in tqdm(range(0, len(data), BATCH_SZ)):
-        for ind in tqdm(range(0, 10, BATCH_SZ)):
-            if not data[ind]:
-                continue
-
-            end_ind = min(ind + BATCH_SZ, len(data))
-
-            encodings = self.tokenizer(
-                data[ind:end_ind],
+        for i in tqdm(range(0, len(data), BATCH_SZ)):
+            batch = data[i:i+BATCH_SZ]
+            
+            tok = self.tokenizer(
+                batch,
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
-                max_length=self.model.config.max_position_embeddings,
+                max_length=max_generation_length,
             ).to(self.device)
-
-            input_ids = encodings["input_ids"]
-            attention_mask = encodings["attention_mask"]
-
+            
+            input_ids = tok["input_ids"]
+            attention_mask = tok["attention_mask"]
+            
             with self:
                 with th.no_grad():
-                    outputs = self.model(
-                        input_ids=input_ids,
-                        attention_mask=attention_mask,
-                        use_cache=False,
-                    )
+                    logits = self.model(input_ids=input_ids, attention_mask=attention_mask).logits
+            
+            # Shift logits and labels to predict next token
+            shift_logits = logits[:, :-1, :].contiguous()
+            shift_labels = input_ids[:, 1:].contiguous()
+            shift_mask = attention_mask[:, 1:].contiguous()
+            
+            # Compute cross-entropy loss for all tokens in batch
+            losses = F.cross_entropy(
+                shift_logits.view(-1, shift_logits.size(-1)),
+                shift_labels.view(-1),
+                reduction="none"
+            ).view(shift_labels.size())
+            
+            masked_loss = (losses * shift_mask).sum()
+            num_tokens = shift_mask.sum()
+            
+            total_loss += masked_loss.item()
+            total_tokens += num_tokens.item()
 
-                    # Shift for causal LM
-                    shift_logits = outputs.logits[:, :-1, :]
-                    shift_labels = input_ids[:, 1:]
-                    shift_mask = attention_mask[:, 1:]
-
-                    # Token-level NLL (sum, not mean)
-                    loss = F.cross_entropy(
-                        shift_logits.reshape(-1, shift_logits.size(-1)),
-                        shift_labels.reshape(-1),
-                        ignore_index=self.tokenizer.pad_token_id,
-                        reduction="sum",
-                    )
-
-                    # Count valid tokens
-                    n_tokens = shift_mask.sum()
-
-                    total_nll += loss
-                    total_tokens += n_tokens
-
-        # Final perplexity (HF definition)
-        ppl = th.exp(total_nll / total_tokens)
-        return ppl
+        return th.exp(th.tensor(total_loss / total_tokens))
