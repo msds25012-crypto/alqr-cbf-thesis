@@ -108,12 +108,6 @@ class PIDSteering:
             output[0][...,-1,:] = output[0][...,-1,:] + u_t
         else: 
             output[...,-1,:] = output[...,-1,:] + u_t
-
-        if (layer_idx == self.T-1):
-            if isinstance(output,tuple):
-                output[0][...,-1,:] = output[0][...,-1,:] + u_t # unbatched (and also tuple)
-            else: 
-                self.X[self.T] = output[-1,-1,:]
         return output
 
     def register_setpoint_tracking_hooks(self):
