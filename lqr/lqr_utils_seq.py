@@ -1,10 +1,6 @@
 import torch as th
 import matplotlib.pyplot as plt
-
-
-# model_name = "gelu-2l"
-# device = th.device("cuda" if th.cuda.is_available() else "cpu")
-# model = Transformer.from_pretrained(model_name).to(device)
+import os
 
 def linearize(tfs, T, m, X_nom):
     """
@@ -30,25 +26,49 @@ def linearize(tfs, T, m, X_nom):
         x = X_nom[t].detach().requires_grad_(True)
         u = U_nom[t].detach().requires_grad_(True)
 
-        f_eval = tfs[t](x,u)
-        # f_eval = tfs[t](x,u).detach().requires_grad_(True)
-        # f_eval = tfs(x,u)
-        # print(f"feval shape: {f_eval.shape}")
-        # f_eval = f_eval[:,-1,:].detach().requires_grad_(True)
-        # print(f"feval shape: {f_eval.shape}")
-        # print(f"x shape: {x.shape}")
+        def f_last(x, u):
+            return tfs[t](x,u)[..., -1, :]
 
-        for i in range(n):
-            grad_x = th.autograd.grad(f_eval[...,-1,i], x, retain_graph=True, create_graph=False)[0]
-            grad_u = th.autograd.grad(f_eval[...,-1,i], u, retain_graph=True, create_graph=False)[0]
-            # print(f"gradx shape: {grad_x[-1,:].shape}")
-            # print(f"eeeee: {A[t, i].shape}")
-            A[t, i] = grad_x[-1,:]
-            # print("here")
-            B[t, i] = grad_u
+        # Compute Jacobians:
+        Jx = th.autograd.functional.jacobian(lambda x_: f_last(x_, u), x, create_graph=False, vectorize=True)   # shape: [n, *x.shape]
+        Ju = th.autograd.functional.jacobian(lambda u_: f_last(x, u_), u, create_graph=False, vectorize=True)   # shape: [n, *u.shape]
+        A[t] = Jx[...,-1,:]
+        B[t] = Ju
 
     return A, B
 
+def mean_linearize(tfs, T, m, X_nom):
+    """
+    Linearize nonlinear dynamics f around nominal trajectory (X_nom, U_nom=0).
+
+    Args:
+        f: dynamics function f(x,u) -> x_next
+        X_nom: nominal states (T+1, B, k, n)
+        U_nom: nominal controls (T, m)
+
+    Returns:
+        A: linearized A matrices (T, n, n)
+        B: linearized B matrices (T, n, m)
+    """
+    U_nom = th.zeros([T, m], device=X_nom.device)
+    n = X_nom.shape[-1]
+    print(X_nom.shape)
+
+    A = th.zeros((T, n, n), dtype=X_nom.dtype, device=X_nom.device)
+
+    for t in range(T):
+        x = X_nom[t].detach().requires_grad_(True)
+        u = U_nom[t].detach().requires_grad_(True)
+
+        def f_last(x, u):
+            return tfs[t](x,u)[..., -1, :]
+
+        # Compute Jacobians:
+        Jx = th.autograd.functional.jacobian(lambda x_: f_last(x_, u), x, create_graph=False, vectorize=True)   # shape: [n, *x.shape]
+        # print(Jx.shape)
+        A[t] = th.mean(Jx[...,-1,:], dim=1)
+
+    return A
 
 def time_varying_lqr(A, B, Q, R, S_T):
     """
@@ -112,62 +132,3 @@ def llama_block_wrapper(block, attention_mask, position_ids, x):
 def new_llama_block_wrapper(block, attention_mask, position_ids, position_embeddings, x): # 4.57
     x = x.unsqueeze(0)
     return block(x, attention_mask=attention_mask, position_ids=position_ids, position_embeddings=position_embeddings)[0]
-
-# Nonlinear dynamics example
-# def pendulum_dynamics(x, u, dt=0.05):
-#     """
-#     Discrete-time nonlinear pendulum dynamics.
-
-#     Args:
-#         x: (2,) state tensor: [theta, omega]
-#         u: (1,) control tensor: torque
-#         dt: timestep size
-
-#     Returns:
-#         x_next: (2,) next state
-#     """
-#     theta, omega = x[0], x[1]
-#     torque = u[0]
-
-#     theta_next = theta + dt * omega
-#     omega_next = omega + dt * (-th.sin(theta) - 0.1 * omega + torque)
-
-#     return th.stack([theta_next, omega_next])
-
-
-
-# n = 2
-# m = 1
-# T = 1000
-
-# # Nominal trajectory
-# X_nom = th.zeros((T+1, n), device=device)
-# X_nom[:,0] = 0.5
-# U_nom = th.zeros((T, m), device=device)
-# U_nom[:,0] = 0.48
- 
-# # Linearize dynamics around nominal
-# A, B = linearize(pendulum_dynamics,T,m,X_nom)
-
-# # Define quadratic cost matrices
-# Q = th.eye(n).unsqueeze(0).repeat(T, 1, 1).to(A.device) * 1
-# R = th.eye(m).unsqueeze(0).repeat(T, 1, 1).to(A.device) * 0
-# Qf = 10000 * th.eye(n).to(A.device)
-
-# # Solve LQR on linearized system
-# K = time_varying_lqr(A, B, Q, R, Qf)
-
-# print("Feedback gains K shape:", K.shape)
-# print("K[0]:", K[0])
-
-# X = th.zeros_like(X_nom)
-# U = th.zeros_like(U_nom)
-# X[0] = th.tensor([0, 0])
-# for i in range(T):
-#     U[i] = U_nom[i]-K[i]@(X[i]-X_nom[i])
-#     X[i+1] = pendulum_dynamics(X[i], U[i])
-
-
-# plt.plot(range(T+1),X[:,0].cpu())
-# plt.plot(range(T+1),X_nom[:,0].cpu())
-# plt.savefig("lqr_test.png")
