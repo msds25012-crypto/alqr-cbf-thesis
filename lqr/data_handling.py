@@ -13,13 +13,13 @@ class ContrastiveBuilder:
         self,
         model: AutoModelForCausalLM,
         tokenizer: AutoTokenizer,
-        dataset_name
+        dataset_name: str = None,
     ):
         self.model = model
         self.device = self.model.device
         print(f"model device: {self.device}")
         self.tokenizer = tokenizer
-        self.dataset = load_dataset(dataset_name)
+        self.dataset = load_dataset(dataset_name) if dataset_name is not None else None
 
         self.T = len(self.model.model.layers)
         self.n = self.model.model.embed_tokens.embedding_dim
@@ -163,16 +163,108 @@ class ContrastiveBuilder:
         with open("../../scratch/" + filename + ".pkl", "wb") as f:
             pickle.dump(tensor_dict, f)
 
+    
+    def collect_data_batch(self, prompts, num_samples, filename, num_tokens=1):
+        # A_iter = num_A
+        sample = random.sample(prompts, num_samples)
+        inputs = self.tokenizer(
+            sample, 
+            return_tensors="pt", 
+            padding=True,
+            truncation=True,
+        ).to(self.device)
+        # print(f"inputs: {inputs}")
+        input_ids = inputs["input_ids"]
+        B,L = input_ids.shape
+        # print(f"B,L: {B,L}")
+        attention_mask = inputs["attention_mask"].float()
+        embedding_layer = self.model.get_input_embeddings()
+        hidden_states = embedding_layer(input_ids)
+        self.X = th.zeros(self.T+1, B, L, hidden_states.size(-1), device=self.device)
 
+        with self:
+            self.model.generate(input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    max_new_tokens=num_tokens,
+                    return_dict_in_generate=True,
+                    do_sample=False,
+                    use_cache=False,
+                    pad_token_id=self.tokenizer.eos_token_id,
+                    )
+            
+            self.X_mean = th.mean(self.X[:,:,-1,:], dim = 1)
+
+        total = num_samples*num_tokens
+        print(f"total: {total}")
+
+        tensor_dict = {
+            "X": self.X_mean,
+        } 
+
+        with open("../../scratch/" + filename + ".pkl", "wb") as f:
+            pickle.dump(tensor_dict, f)
+
+
+
+    def collect_jacobians(self, prompts, num_samples, filename, num_tokens=1):
+        sample = random.sample(prompts, num_samples)
+        for prompt in sample:
+            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+            # print(f"inputs: {inputs}")
+            input_ids = inputs["input_ids"]
+            attention_mask = inputs["attention_mask"].float()
+            embedding_layer = self.model.get_input_embeddings()
+            hidden_states = embedding_layer(input_ids)
+            self.X = th.zeros_like(hidden_states).repeat(self.T+1, 1, 1).to(self.device)
+
+            with self:
+                self.model.generate(input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        max_new_tokens=num_tokens,
+                        return_dict_in_generate=True,
+                        do_sample=False,
+                        use_cache=False,
+                        pad_token_id=self.tokenizer.eos_token_id,
+                        )
+            
+            self.X_sum = self.X_sum + self.X[:,-1,:]
+
+
+            # and A_iter > 0:
+            batch_size, seq_len = input_ids.shape
+            position_ids = th.arange(seq_len, dtype=th.long, device=self.device)
+            position_ids = position_ids.unsqueeze(0).expand(batch_size, seq_len).to(device)
+
+            position_embeddings = self.model.model.rotary_emb(hidden_states, position_ids)
+
+            wrapped_tfs_temp = [partial(lqr.new_llama_block_wrapper, tf, attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
+            tfs_with_control_temp = [partial(lqr.transformerBlockControl, tf) for tf in wrapped_tfs_temp]
+            A, _ = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X)
+            self.A_sum = self.A_sum + A
+                # A_iter -= 1
+
+
+        total = num_samples*num_tokens
+        print(f"total: {total}")
+        tensor_dict = {
+            "A": self.A_sum / total,
+        } 
+
+        with open("../../scratch/" + filename + ".pkl", "wb") as f:
+            pickle.dump(tensor_dict, f)
+
+
+
+###################################################
+###################################################
 
 
 device = th.device("cuda" if th.cuda.is_available() else "cpu")
-# use the same tokenizer as TinyLlama
 
 # model_name = "meta-llama/Llama-3.2-1B"
-# model_name = "google/gemma-2-2b"
+model_name = "google/gemma-2-2b"
 # model_name = "Qwen/Qwen2.5-3B"
-model_name = "meta-llama/Meta-Llama-3-8B"
+# model_name = "meta-llama/Meta-Llama-3-8B"
 
 
 quant_config = BitsAndBytesConfig(
@@ -190,18 +282,35 @@ tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
 tokenizer.pad_token = tokenizer.eos_token
 tokenizer.pad_token_id = tokenizer.eos_token_id
 
-# model = AutoModelForCausalLM.from_pretrained(
-#     model_name).to(device)
-tokenizer.pad_token = tokenizer.eos_token
-tokenizer.pad_token_id = tokenizer.eos_token_id
 dataset_name = "allenai/real-toxicity-prompts"
-dataguy = ContrastiveBuilder(model, tokenizer, dataset_name)
+dataset = load_dataset(dataset_name)
+data = dataset["train"]
 
-start_time = time.perf_counter()
-# filename = "llama-1b_batch_seq"
-filename = "llama-3-8b_nontox"
-dataguy.collect_data(120, 1, "toxicity", filename, lb=0.0, ub=0.1, collect_A=True)
-end_time = time.perf_counter()
+non_toxic = [
+    item["text"]
+    for item in data["prompt"]
+    if item["toxicity"] is not None and item["toxicity"] < 0.1
+]
+
+filename = "FILENAME"
+dataguy = ContrastiveBuilder(model, tokenizer)
+dataguy.collect_data_batch(non_toxic, 100, filename)
+
+filename = "JAC_FILENAME"
+dataguy.collect_jacobians(non_toxic, 100, filename)
+
+
+
+data = load_dataset("rahmanidashti/truthful-qa", "multiple-choice")["validation"]
+prompt_with_answer = [
+            item["question"] + " " + item["mc0_targets"]["choices"][i]
+            for item in data
+            for i in range(2)
+            if item["mc0_targets"] is not None and item["mc0_targets"]["labels"][i] == 0
+        ]
+
+filename = "gemma-2-2b-nontruth_vec"
+dataguy.collect_data_batch(prompt_with_answer, 100, filename)
 
 with open("../../scratch/" + filename + ".pkl", "rb") as f:
     loaded_tensors = pickle.load(f)
@@ -209,9 +318,4 @@ print(f"seq time: {end_time - start_time}")
 
 # # Access tensors
 X = loaded_tensors["X"]
-A = loaded_tensors["A"]
 print(X)
-print(A)
-
-
-##############################################
