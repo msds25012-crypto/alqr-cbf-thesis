@@ -7,6 +7,7 @@ from datasets import load_dataset
 import random
 import pickle
 import time
+from steering import Mode
 
 class ContrastiveBuilder:
     def __init__(
@@ -31,8 +32,21 @@ class ContrastiveBuilder:
 
         self.X = None # to allocate at runtime -- dependent on input length
 
+        self.e_prev = None
+        # self.e_prev = th.zeros_like(self.X_sum[0])
+        
+        self.U = th.zeros((self.T, self.n), device=self.device)
+        # self.e_sum = th.zeros_like(self.X_sum[0])
+        self.e_sum = None
+
+        self.targets = None
 
         self.hooks = []
+        self.mode = Mode.COLLECTING
+
+        self.Kp = None
+        self.Ki = None
+        self.Kd = None
 
     def hook_collector(self, layer_idx, module, input, output):
         self.X[layer_idx] = input[0]
@@ -56,13 +70,52 @@ class ContrastiveBuilder:
                 )
             )
 
+    def hook_PID(self, layer_idx, module, input, output):
+        x = input[0][:,-1,:]
+
+        # if layer_idx == 6:
+        e = self.targets[layer_idx] - x
+        self.e_sum += e.squeeze(0)
+        # print(f"alpha: {alpha/th.norm(self.E[layer_idx])}")
+
+        u_t = self.Kp*e + self.Ki*self.e_sum + self.Kd*(e - self.e_prev)
+        # print(f"x shape: {x.shape}")
+        self.e_prev = e
+        self.X[layer_idx] = x[-1,:]
+        self.U[layer_idx] = u_t[-1]
+
+        if isinstance(output,tuple):
+            output[0][...,-1,:] = output[0][...,-1,:] + u_t
+        else: 
+            output[...,-1,:] = output[...,-1,:] + u_t
+        return output
+
+    def register_PID_hooks(self):
+        """Register the hooks."""
+
+        for layer_idx, layer in enumerate(self.model.model.layers):
+            def hook_wrapper(layer_idx):
+                def hook(module, input, output):
+                    return self.hook_PID(layer_idx, module, input, output)
+
+                return hook
+
+            self.hooks.append(
+                layer.register_forward_hook(
+                    hook_wrapper(layer_idx)
+                )
+            )
+
     def remove_hooks(self):
         for hook in self.hooks:
             hook.remove()
         self.hooks = []
 
     def __enter__(self):
-        self.register_hooks()
+        if self.mode == Mode.COLLECTING:
+            self.register_hooks()
+        elif self.mode == Mode.STEERING:
+            self.register_PID_hooks()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -90,7 +143,7 @@ class ContrastiveBuilder:
 
         batch_size, seq_len = input_ids.shape
         position_ids = th.arange(seq_len, dtype=th.long, device=self.device)
-        position_ids = position_ids.unsqueeze(0).expand(batch_size, seq_len).to(device)
+        position_ids = position_ids.unsqueeze(0).expand(batch_size, seq_len).to(self.device)
 
         position_embeddings = self.model.model.rotary_emb(hidden_states, position_ids)
 
@@ -103,6 +156,7 @@ class ContrastiveBuilder:
         self.A_sum = self.A_sum + A
 
     def collect_data(self, num_samples, num_tokens, trait, filename, lb=0, ub=0.1, split="train", collect_A = False):#, num_A = 1):
+        self.mode = Mode.COLLECTING
         data = self.dataset[split]
         filtered_data = [
             item["text"]
@@ -137,7 +191,7 @@ class ContrastiveBuilder:
             if collect_A:# and A_iter > 0:
                 batch_size, seq_len = input_ids.shape
                 position_ids = th.arange(seq_len, dtype=th.long, device=self.device)
-                position_ids = position_ids.unsqueeze(0).expand(batch_size, seq_len).to(device)
+                position_ids = position_ids.unsqueeze(0).expand(batch_size, seq_len).to(self.device)
 
                 position_embeddings = self.model.model.rotary_emb(hidden_states, position_ids)
 
@@ -165,6 +219,7 @@ class ContrastiveBuilder:
 
     
     def collect_data_batch(self, prompts, num_samples, filename, num_tokens=1):
+        self.mode = Mode.COLLECTING
         # A_iter = num_A
         sample = random.sample(prompts, num_samples)
         inputs = self.tokenizer(
@@ -207,6 +262,8 @@ class ContrastiveBuilder:
 
 
     def collect_jacobians(self, prompts, num_samples, filename, num_tokens=1):
+        self.mode = Mode.COLLECTING
+        
         sample = random.sample(prompts, num_samples)
         for prompt in sample:
             inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
@@ -217,23 +274,24 @@ class ContrastiveBuilder:
             hidden_states = embedding_layer(input_ids)
             self.X = th.zeros_like(hidden_states).repeat(self.T+1, 1, 1).to(self.device)
 
-            with self:
-                self.model.generate(input_ids=input_ids,
-                        attention_mask=attention_mask,
-                        max_new_tokens=num_tokens,
-                        return_dict_in_generate=True,
-                        do_sample=False,
-                        use_cache=False,
-                        pad_token_id=self.tokenizer.eos_token_id,
-                        )
+            with th.no_grad():
+                with self:
+                    self.model.generate(input_ids=input_ids,
+                            attention_mask=attention_mask,
+                            max_new_tokens=num_tokens,
+                            return_dict_in_generate=True,
+                            do_sample=False,
+                            use_cache=False,
+                            pad_token_id=self.tokenizer.eos_token_id,
+                            )
             
-            self.X_sum = self.X_sum + self.X[:,-1,:]
+            # self.X_sum = self.X_sum + self.X[:,-1,:]
 
 
             # and A_iter > 0:
             batch_size, seq_len = input_ids.shape
             position_ids = th.arange(seq_len, dtype=th.long, device=self.device)
-            position_ids = position_ids.unsqueeze(0).expand(batch_size, seq_len).to(device)
+            position_ids = position_ids.unsqueeze(0).expand(batch_size, seq_len).to(self.device)
 
             position_embeddings = self.model.model.rotary_emb(hidden_states, position_ids)
 
@@ -254,68 +312,53 @@ class ContrastiveBuilder:
             pickle.dump(tensor_dict, f)
 
 
+    def collect_sequentialPID(self, prompts, num_samples, filename, target_acts, kp=0.5, ki=0.01, kd=0.01, num_tokens=1):
+        self.mode = Mode.STEERING
+        
+        self.Kp = kp
+        self.Ki = ki
+        self.Kd = kd
 
-###################################################
-###################################################
+        self.targets = target_acts
+        sample = random.sample(prompts, num_samples)
+        
 
+        inputs = self.tokenizer(
+            sample, 
+            return_tensors="pt", 
+            padding=True,
+            truncation=True,
+        ).to(self.device)
 
-device = th.device("cuda" if th.cuda.is_available() else "cpu")
+        input_ids = inputs["input_ids"]
+        B,L = input_ids.shape
+        self.e_sum = th.zeros((input_ids.shape[0], target_acts[0].shape[0]), device=self.device)
+        self.e_prev = th.zeros((input_ids.shape[0], target_acts[0].shape[0]), device=self.device)
 
-# model_name = "meta-llama/Llama-3.2-1B"
-model_name = "google/gemma-2-2b"
-# model_name = "Qwen/Qwen2.5-3B"
-# model_name = "meta-llama/Meta-Llama-3-8B"
+        attention_mask = inputs["attention_mask"].float()
+        embedding_layer = self.model.get_input_embeddings()
+        hidden_states = embedding_layer(input_ids)
+        self.X = th.zeros(self.T+1, B, L, hidden_states.size(-1), device=self.device)
 
+        with th.no_grad():
+            with self:
+                self.model.generate(input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        max_new_tokens=num_tokens,
+                        return_dict_in_generate=True,
+                        do_sample=False,
+                        use_cache=False,
+                        pad_token_id=self.tokenizer.eos_token_id,
+                        )
+            
+            self.X_mean = th.mean(self.X[:,:,-1,:], dim = 1)
 
-quant_config = BitsAndBytesConfig(
-    # load_in_4bit=True,          # or load_in_8bit=True
-    load_in_8bit=True,
-    bnb_4bit_compute_dtype=th.float16,
-    bnb_4bit_quant_type="nf4",  # best for LLMs
-    bnb_4bit_use_double_quant=True,
-)
-model = AutoModelForCausalLM.from_pretrained(
-    model_name, quantization_config=quant_config, dtype=th.float32, device_map="auto")
+        total = num_samples*num_tokens
+        print(f"total: {total}")
 
+        tensor_dict = {
+            "X_contr": self.X_mean,
+        } 
 
-tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
-tokenizer.pad_token = tokenizer.eos_token
-tokenizer.pad_token_id = tokenizer.eos_token_id
-
-dataset_name = "allenai/real-toxicity-prompts"
-dataset = load_dataset(dataset_name)
-data = dataset["train"]
-
-non_toxic = [
-    item["text"]
-    for item in data["prompt"]
-    if item["toxicity"] is not None and item["toxicity"] < 0.1
-]
-
-filename = "FILENAME"
-dataguy = ContrastiveBuilder(model, tokenizer)
-dataguy.collect_data_batch(non_toxic, 100, filename)
-
-filename = "JAC_FILENAME"
-dataguy.collect_jacobians(non_toxic, 100, filename)
-
-
-
-data = load_dataset("rahmanidashti/truthful-qa", "multiple-choice")["validation"]
-prompt_with_answer = [
-            item["question"] + " " + item["mc0_targets"]["choices"][i]
-            for item in data
-            for i in range(2)
-            if item["mc0_targets"] is not None and item["mc0_targets"]["labels"][i] == 0
-        ]
-
-filename = "gemma-2-2b-nontruth_vec"
-dataguy.collect_data_batch(prompt_with_answer, 100, filename)
-
-with open("../../scratch/" + filename + ".pkl", "rb") as f:
-    loaded_tensors = pickle.load(f)
-print(f"seq time: {end_time - start_time}")
-
-# # Access tensors
-X = loaded_tensors["X"]
-print(X)
+        with open("../../scratch/" + filename + ".pkl", "wb") as f:
+            pickle.dump(tensor_dict, f)
