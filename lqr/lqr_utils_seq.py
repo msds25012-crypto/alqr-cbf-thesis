@@ -70,6 +70,46 @@ def mean_linearize(tfs, T, m, X_nom):
 
     return A
 
+def time_varying_lqr_noB(A, Q, R, S_T):
+    """
+    Solve the time-varying LQR problem given linearized dynamics.
+
+    Args:
+        A: (T, n, n)
+        B: (T, n, m)
+        Q: (T, n, n)
+        R: (T, m, m)
+        Qf: (n, n)
+
+    Returns:
+        K: (T, m, n) feedback gains
+    """
+    T, n, m = A.shape
+
+    S = th.zeros((T+1, n, n), dtype=A.dtype, device=A.device)
+    K = th.zeros((T, m, n), dtype=A.dtype, device=A.device)
+
+
+    S[T] = S_T
+
+    for t in reversed(range(T)):
+        At = A[t]
+        Qt = Q[t]
+        Rt = R[t]
+
+        # Sk = Ak^T [Sk+1 − Sk+1 Bk (BkT Sk+1 Bk + Rk)^-1 BkT Sk+1]Ak + Qk
+        P = (S[t+1] + Rt).to(A.device) # = BkT Sk+1 Bk + Rk
+        F = (S[t+1] @ At).to(A.device) # = BkT Sk+1 Ak  
+        G = (Qt + At.transpose(-2, -1) @ S[t+1] @ At).to(A.device) # = Ak^T Sk+1 Ak + Qk
+
+        P_inv = th.linalg.inv(P)
+        K[t] = P_inv @ F
+
+        S[t] = G - F.transpose(-2, -1) @ P_inv @ F
+
+    return K
+
+
 def time_varying_lqr(A, B, Q, R, S_T):
     """
     Solve the time-varying LQR problem given linearized dynamics.

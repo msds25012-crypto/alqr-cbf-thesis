@@ -96,7 +96,7 @@ def run_trials(model, tokenizer, prompts, num_trials, A, X_contr, l_list=[1], q_
     for q in q_list:
         for r in r_list:
             for qf in qf_list:
-                steer_contr = LQRSteering(model, tokenizer, q=q,r=r,qf=qf, A=A, contrastive_vecs=X_contr)
+                steer_contr = LQRSteering(model, tokenizer, q=q,r=r,qf=qf, A=A, contrastive_vecs=X_contr, perserve_mem=True)
                 for l in l_list:
                     contr_completions = []
                     un_completions = []
@@ -145,11 +145,11 @@ def run_trials(model, tokenizer, prompts, num_trials, A, X_contr, l_list=[1], q_
 
 def main():
     # prompts = utils.get_refused_prompts()
-    # model_name = "meta-llama/Llama-3.1-8B-Instruct"
-    model_name = "Qwen/Qwen2.5-3B-Instruct"
+    model_name = "meta-llama/Llama-3.1-8B-Instruct"
+    # model_name = "Qwen/Qwen2.5-3B-Instruct"
     # model_name = "Qwen/Qwen2.5-14B-Instruct"
 
-    output_filename = "qwen_test"
+    output_filename = "test"
 
     model, tokenizer = utils.load_model(model_name, quant=True)
     harmful_prompts = utils.get_refused_prompts()[416:]
@@ -158,13 +158,13 @@ def main():
         tokenize=False,
         add_generation_prompt=True
     ) for p in harmful_prompts]
-    # ref = load_file("llama-3.1-8B-it-ref")
-    # nonref = load_file("llama-3.1-8B-it-nonref")
-    # jac = load_file("llama-3.1-8B-it-nonref_jac")
+    ref = load_file("Llama-3.1-8B-Instruct-ref")
+    nonref = load_file("Llama-3.1-8B-Instruct-nonref")
+    jac = load_file("Llama-3.1-8B-Instruct-nonref_jac")
     
-    ref = load_file("Qwen2.5-3B-Instruct-ref")
-    nonref = load_file("Qwen2.5-3B-Instruct-nonref")
-    jac = load_file("Qwen2.5-3B-Instruct-nonref_jac")
+    # ref = load_file("Qwen2.5-3B-Instruct-ref")
+    # nonref = load_file("Qwen2.5-3B-Instruct-nonref")
+    # jac = load_file("Qwen2.5-3B-Instruct-nonref_jac")
 
     # ref = load_file("Qwen2.5-14B-Instruct-ref")
     # nonref = load_file("Qwen2.5-14B-Instruct-nonref")
@@ -190,9 +190,9 @@ def main():
 
     q_list = [0.1]
     r_list = [1]
-    qf_list = [0.1]
+    qf_list = [1]
 
-    num_trials = 104
+    num_trials = 10
     # num_trials = 10
     run_trials(
         model, 

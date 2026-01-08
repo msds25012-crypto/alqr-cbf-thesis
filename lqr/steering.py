@@ -32,6 +32,7 @@ class LQRSteering:
         qf: float = 1,
         A: th.Tensor = None,    
         contrastive_vecs: th.Tensor = None,
+        perserve_mem: bool = False,
     ):
         self.model = model
         self.device = model.device
@@ -50,9 +51,18 @@ class LQRSteering:
         self.Qf = th.eye(self.n).to(self.device) * qf
         
         
-        self.B = th.eye(self.n).repeat(self.T, 1, 1).to(self.device) 
-        self.K = lqr.time_varying_lqr(self.A, self.B, self.Q, self.R, self.Qf) if A is not None else None
         
+        if perserve_mem:
+            self.K = lqr.time_varying_lqr_noB(self.A, self.Q, self.R, self.Qf) if A is not None else None
+            del self.A
+            del self.Q
+            del self.R
+            del self.Qf
+        else:
+            self.B = th.eye(self.n).repeat(self.T, 1, 1).to(self.device) 
+            self.K = lqr.time_varying_lqr(self.A, self.B, self.Q, self.R, self.Qf) if A is not None else None
+
+
         self.X = None # to allocate at runtime
         self.U = th.zeros((self.T, self.n), device=self.device)
 
