@@ -227,39 +227,44 @@ class ContrastiveBuilder:
             pickle.dump(tensor_dict, f)
 
     
-    def collect_data_batch(self, prompts, num_samples, filename, num_tokens=1):
+    def collect_data_batch(self, prompts, num_samples, filename, num_tokens=1, batch_size=50):
         self.mode = Mode.COLLECTING
         # A_iter = num_A
         # self.X_sum = th.zeros((self.T+1, self.n,)).to(self.device)
         # self.X_mean = th.zeros((self.T+1, self.n,)).to(self.device)
+        X_sum = th.zeros((self.T+1, self.n,)).to(self.device)
 
-        sample = random.sample(prompts, num_samples)
-        inputs = self.tokenizer(
-            sample, 
-            return_tensors="pt", 
-            padding=True,
-            truncation=True,
-        ).to(self.device)
-        # print(f"inputs: {inputs}")
-        input_ids = inputs["input_ids"]
-        B,L = input_ids.shape
-        # print(f"B,L: {B,L}")
-        attention_mask = inputs["attention_mask"].float()
-        embedding_layer = self.model.get_input_embeddings()
-        hidden_states = embedding_layer(input_ids)
-        self.X = th.zeros(self.T+1, B, L, hidden_states.size(-1), device=self.device)
+        samples = random.sample(prompts, num_samples)
+        for i in range(0,len(samples), batch_size):
+            sample = samples[i:i+batch_size]
+            inputs = self.tokenizer(
+                sample, 
+                return_tensors="pt", 
+                padding=True,
+                truncation=True,
+            ).to(self.device)
+            # print(f"inputs: {inputs}")
+            input_ids = inputs["input_ids"]
+            B,L = input_ids.shape
+            # print(f"B,L: {B,L}")
+            attention_mask = inputs["attention_mask"].float()
+            embedding_layer = self.model.get_input_embeddings()
+            hidden_states = embedding_layer(input_ids)
+            self.X = th.zeros(self.T+1, B, L, hidden_states.size(-1), device=self.device)
 
-        with self:
-            self.model.generate(input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    max_new_tokens=num_tokens,
-                    return_dict_in_generate=True,
-                    do_sample=False,
-                    use_cache=False,
-                    pad_token_id=self.tokenizer.eos_token_id,
-                    )
-            
-            X_mean = th.mean(self.X[:,:,-1,:], dim = 1)
+            with self:
+                self.model.generate(input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        max_new_tokens=num_tokens,
+                        return_dict_in_generate=True,
+                        do_sample=False,
+                        use_cache=False,
+                        pad_token_id=self.tokenizer.eos_token_id,
+                        )
+                
+            X_sum += th.sum(self.X[:,:,-1,:], dim = 1)
+            # X_mean = th.mean(self.X[:,:,-1,:], dim = 1)
+        X_mean = X_sum / len(samples)
 
         total = num_samples*num_tokens
         print(f"total: {total}")
@@ -276,7 +281,7 @@ class ContrastiveBuilder:
 
 
 
-    def collect_jacobians(self, prompts, num_samples, filename, num_tokens=1, max_ctx=24):
+    def collect_jacobians(self, prompts, num_samples, filename, num_tokens=1, max_ctx=512): # 24 works for llama 8-9b
         self.mode = Mode.COLLECTING
         self.A_sum = th.zeros((self.T, self.n, self.n,)).to(self.device)
 

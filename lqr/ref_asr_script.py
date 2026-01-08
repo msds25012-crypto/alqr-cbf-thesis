@@ -8,7 +8,7 @@ def main():
     model_name = "Qwen/Qwen2.5-3B-Instruct"
     # model_name = "Qwen/Qwen2.5-14B-Instruct"
 
-    output_filename = "test"
+    output_filename = "qwen2.5-3b-ref_sweep"
 
     l_list = [0.5, 0.75, 1, 1.25, 1.5]
     # l_list = [0.75]
