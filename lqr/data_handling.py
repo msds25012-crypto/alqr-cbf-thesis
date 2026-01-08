@@ -8,6 +8,12 @@ import random
 import pickle
 import time
 from steering import Mode
+import yaml
+
+with open('config/config.yaml', 'r') as f:
+    config_data = yaml.safe_load(f)
+PICKLE_JAR = config_data["environment"]["pickle_jar"]
+# print(PICKLE_JAR)
 
 class ContrastiveBuilder:
     def __init__(
@@ -26,16 +32,19 @@ class ContrastiveBuilder:
         self.n = self.model.model.embed_tokens.embedding_dim
         self.m = self.n
         print(f"Latent dim: {self.n}")
-        self.A_sum = th.zeros((self.T, self.n, self.n,)).to(self.device)
-        self.X_sum = th.zeros((self.T+1, self.n,)).to(self.device)
-        self.X_mean = th.zeros((self.T+1, self.n,)).to(self.device)
+        # self.A_sum = th.zeros((self.T, self.n, self.n,)).to(self.device)
+        # self.X_sum = th.zeros((self.T+1, self.n,)).to(self.device)
+        # self.X_mean = th.zeros((self.T+1, self.n,)).to(self.device)
+        self.A_sum = None
+        self.X_sum = None
+        self.X_mean = None
 
         self.X = None # to allocate at runtime -- dependent on input length
 
         self.e_prev = None
         # self.e_prev = th.zeros_like(self.X_sum[0])
         
-        self.U = th.zeros((self.T, self.n), device=self.device)
+        # self.U = th.zeros((self.T, self.n), device=self.device)
         # self.e_sum = th.zeros_like(self.X_sum[0])
         self.e_sum = None
 
@@ -214,13 +223,16 @@ class ContrastiveBuilder:
                 "X": self.X_sum / total,
             } 
 
-        with open("../../scratch/" + filename + ".pkl", "wb") as f:
+        with open(PICKLE_JAR + filename + ".pkl", "wb") as f:
             pickle.dump(tensor_dict, f)
 
     
     def collect_data_batch(self, prompts, num_samples, filename, num_tokens=1):
         self.mode = Mode.COLLECTING
         # A_iter = num_A
+        # self.X_sum = th.zeros((self.T+1, self.n,)).to(self.device)
+        # self.X_mean = th.zeros((self.T+1, self.n,)).to(self.device)
+
         sample = random.sample(prompts, num_samples)
         inputs = self.tokenizer(
             sample, 
@@ -247,26 +259,34 @@ class ContrastiveBuilder:
                     pad_token_id=self.tokenizer.eos_token_id,
                     )
             
-            self.X_mean = th.mean(self.X[:,:,-1,:], dim = 1)
+            X_mean = th.mean(self.X[:,:,-1,:], dim = 1)
 
         total = num_samples*num_tokens
         print(f"total: {total}")
 
         tensor_dict = {
-            "X": self.X_mean,
+            "X": X_mean,
         } 
 
-        with open("../../scratch/" + filename + ".pkl", "wb") as f:
+        with open(PICKLE_JAR + filename + ".pkl", "wb") as f:
             pickle.dump(tensor_dict, f)
-
-
-
-    def collect_jacobians(self, prompts, num_samples, filename, num_tokens=1):
-        self.mode = Mode.COLLECTING
         
+        del self.X
+        self.X = None
+
+
+
+    def collect_jacobians(self, prompts, num_samples, filename, num_tokens=1, max_ctx=24):
+        self.mode = Mode.COLLECTING
+        self.A_sum = th.zeros((self.T, self.n, self.n,)).to(self.device)
+
         sample = random.sample(prompts, num_samples)
+        iter = 1
         for prompt in sample:
-            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+            print(f"iter: {iter}")
+            iter += 1
+            inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=max_ctx).to(self.device)
+
             # print(f"inputs: {inputs}")
             input_ids = inputs["input_ids"]
             attention_mask = inputs["attention_mask"].float()
@@ -297,9 +317,14 @@ class ContrastiveBuilder:
 
             wrapped_tfs_temp = [partial(lqr.new_llama_block_wrapper, tf, attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
             tfs_with_control_temp = [partial(lqr.transformerBlockControl, tf) for tf in wrapped_tfs_temp]
-            A, _ = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X)
+            # A, _ = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X)
+            A = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X)
             self.A_sum = self.A_sum + A
                 # A_iter -= 1
+            del A
+            A = None
+            del self.X
+            self.X = None
 
 
         total = num_samples*num_tokens
@@ -308,8 +333,11 @@ class ContrastiveBuilder:
             "A": self.A_sum / total,
         } 
 
-        with open("../../scratch/" + filename + ".pkl", "wb") as f:
+        with open(PICKLE_JAR + filename + ".pkl", "wb") as f:
             pickle.dump(tensor_dict, f)
+
+        del self.A_sum
+        self.A_sum = None
 
 
     def collect_sequentialPID(self, prompts, num_samples, filename, target_acts, kp=0.5, ki=0.01, kd=0.01, num_tokens=1):

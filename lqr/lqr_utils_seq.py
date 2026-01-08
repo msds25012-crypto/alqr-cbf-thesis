@@ -20,7 +20,7 @@ def linearize(tfs, T, m, X_nom):
     # print(X_nom.shape)
 
     A = th.zeros((T, n, n), dtype=X_nom.dtype, device=X_nom.device)
-    B = th.zeros((T, n, m), dtype=X_nom.dtype, device=X_nom.device)
+    # B = th.zeros((T, n, m), dtype=X_nom.dtype, device=X_nom.device)
 
     for t in range(T):
         x = X_nom[t].detach().requires_grad_(True)
@@ -31,11 +31,11 @@ def linearize(tfs, T, m, X_nom):
 
         # Compute Jacobians:
         Jx = th.autograd.functional.jacobian(lambda x_: f_last(x_, u), x, create_graph=False, vectorize=True)   # shape: [n, *x.shape]
-        Ju = th.autograd.functional.jacobian(lambda u_: f_last(x, u_), u, create_graph=False, vectorize=True)   # shape: [n, *u.shape]
+        # Ju = th.autograd.functional.jacobian(lambda u_: f_last(x, u_), u, create_graph=False, vectorize=True)   # shape: [n, *u.shape]
         A[t] = Jx[...,-1,:]
-        B[t] = Ju
+        # B[t] = Ju
 
-    return A, B
+    return A
 
 def mean_linearize(tfs, T, m, X_nom):
     """

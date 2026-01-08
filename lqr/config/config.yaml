@@ -1,0 +1,3 @@
+environment:
+  pickle_jar: "../../pickles/"
+  ref_data_path: "./ref_data/"
