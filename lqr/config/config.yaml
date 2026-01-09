@@ -1,3 +1,4 @@
 environment:
   pickle_jar: "../../pickles/"
   ref_data_path: "./ref_data/"
+  tqa_data_path: "./tqa_data/"
