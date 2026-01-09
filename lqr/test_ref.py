@@ -50,9 +50,9 @@ def calculate_dist_n(texts_list, n=1):
     return len(unique_ngrams) / len(ngrams)
 
 
-def run_trials(model, tokenizer, prompts, num_trials, A, X_contr, l_list=[1], q_list=[0.1], r_list=[10], qf_list=[0.1], k=50, filename="json_out"):
+def run_trials(model, tokenizer, prompts, num_trials, A, X_contr, l_list=[1], q_list=[0.1], r_list=[10], qf_list=[0.1], k=50, do_sample=False, filename="json_out"):
     samples = random.sample(prompts, num_trials)
-    do_sample = False
+    # do_sample = False
     # print("lambda,q,r,qf,num_safeified,num_unsafeified,num_tox_un,num_tox_contr,dist1_base,dist2_base,dist3_base,dist1_steered,dist2_steered,dist3_steered, ppl_base, ppl_steered")
 
     start_time = time.perf_counter()
@@ -133,6 +133,7 @@ def run_trials(model, tokenizer, prompts, num_trials, A, X_contr, l_list=[1], q_
                     # print(f"count unsteered: {count_unsteered}")
                     # print(f"count steered non: {count_steered_non}")
                     # print(f"count unsteered non: {count_unsteered_non}")
+                del steer_contr
 
 
     data_list.append({"sweeps": sweep_data_list})
@@ -145,7 +146,8 @@ def run_trials(model, tokenizer, prompts, num_trials, A, X_contr, l_list=[1], q_
 
 def main():
     # prompts = utils.get_refused_prompts()
-    model_name = "meta-llama/Llama-3.1-8B-Instruct"
+    # model_name = "meta-llama/Llama-3.1-8B-Instruct"
+    model_name = "google/gemma-2-9B-it"
     # model_name = "Qwen/Qwen2.5-3B-Instruct"
     # model_name = "Qwen/Qwen2.5-14B-Instruct"
 
@@ -158,9 +160,14 @@ def main():
         tokenize=False,
         add_generation_prompt=True
     ) for p in harmful_prompts]
-    ref = load_file("Llama-3.1-8B-Instruct-ref")
-    nonref = load_file("Llama-3.1-8B-Instruct-nonref")
-    jac = load_file("Llama-3.1-8B-Instruct-nonref_jac")
+
+    ref = load_file("gemma-2-9b-it-ref")
+    nonref = load_file("gemma-2-9b-it-nonref")
+    jac = load_file("gemma-2-9b-it-nonref_jac")
+
+    # ref = load_file("Llama-3.1-8B-Instruct-ref")
+    # nonref = load_file("Llama-3.1-8B-Instruct-nonref")
+    # jac = load_file("Llama-3.1-8B-Instruct-nonref_jac")
     
     # ref = load_file("Qwen2.5-3B-Instruct-ref")
     # nonref = load_file("Qwen2.5-3B-Instruct-nonref")
@@ -205,7 +212,7 @@ def main():
         q_list, 
         r_list, 
         qf_list,
-        output_filename
+        filename=output_filename
     )
 
 

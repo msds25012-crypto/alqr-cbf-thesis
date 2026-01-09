@@ -1,25 +1,28 @@
-import asr as asr
 import test_ref as tref
 import json
 
 def main():
     # prompts = utils.get_refused_prompts()
     # model_name = "meta-llama/Llama-3.1-8B-Instruct"
-    model_name = "Qwen/Qwen2.5-3B-Instruct"
+    # model_name = "Qwen/Qwen2.5-3B-Instruct"
     # model_name = "Qwen/Qwen2.5-14B-Instruct"
+    model_name = "google/gemma-2-9B-it"
 
-    output_filename = "qwen2.5-3b-ref_sweep"
+    output_filename = "gemma-2-9b-TEMPSWEEP"
 
-    l_list = [0.5, 0.75, 1, 1.25, 1.5]
-    # l_list = [0.75]
+    l_list = [0.5, 1, 1.5, 2, 2.5]
+    # l_list = [1]
 
     # q_list = [0.1]
     # r_list = [1]
     # qf_list = [0.1]
 
+    # q_list = [0.1]
     q_list = [0.1, 1, 10]
     r_list = [0.1, 1, 10]
     qf_list = [0.1, 1, 10]
+    # r_list = [1]
+    # qf_list = [1]
 
     num_trials = 104
 
@@ -28,13 +31,17 @@ def main():
     # nonref = load_file("llama-3.1-8B-it-nonref")
     # jac = load_file("llama-3.1-8B-it-nonref_jac")
     
-    ref = tref.load_file("Qwen2.5-3B-Instruct-ref")
-    nonref = tref.load_file("Qwen2.5-3B-Instruct-nonref")
-    jac = tref.load_file("Qwen2.5-3B-Instruct-nonref_jac")
+    # ref = tref.load_file("Qwen2.5-3B-Instruct-ref")
+    # nonref = tref.load_file("Qwen2.5-3B-Instruct-nonref")
+    # jac = tref.load_file("Qwen2.5-3B-Instruct-nonref_jac")
 
     # ref = load_file("Qwen2.5-14B-Instruct-ref")
     # nonref = load_file("Qwen2.5-14B-Instruct-nonref")
     # jac = load_file("Qwen2.5-14B-Instruct-nonref_jac")
+
+    ref = tref.load_file("gemma-2-9b-it-ref")
+    nonref = tref.load_file("gemma-2-9b-it-nonref")
+    jac = tref.load_file("gemma-2-9b-it-nonref_jac")
 
 
     model, tokenizer = tref.utils.load_model(model_name, quant=True)
@@ -58,7 +65,7 @@ def main():
     del X
     del X_ref
     
-    # num_trials = 10
+    k=200
     tref.run_trials(
         model, 
         tokenizer, 
@@ -70,13 +77,16 @@ def main():
         q_list, 
         r_list, 
         qf_list,
+        k,
+        True,
         output_filename
     )
 
     print("__________________________________________\nFinished Initial Sweep\n__________________________________________")
 
+    import asr as asr
 
-    it_format = asr.qwen_it_format
+    it_format = asr.gemma_it_format
 
     data_file_path = asr.PATH + output_filename + ".txt"
     with open(data_file_path, 'r') as file:
@@ -84,7 +94,7 @@ def main():
 
     print("UNSTEERED")
     inps = asr.get_classifier_inputs(it_format, data[0]["unsteered output"])
-    u_score = asr.harmbench_judge(inps)
+    u_score = asr.harmbench_judge(inps, batch_size=4)
     data[0]["unsteered ASR"] = u_score
 
     print("STEERED")
@@ -95,7 +105,7 @@ def main():
         l = d["lambda"]
         print(f"lambda: {l}, q: {q}, r: {r}, qf: {qf}")
         inps = asr.get_classifier_inputs(it_format, d["steered output"])
-        s_score = asr.harmbench_judge(inps)
+        s_score = asr.harmbench_judge(inps, batch_size=4)
 
         d["Steered ASR"] = s_score
 
