@@ -254,7 +254,8 @@ def main():
     it_format = no_it_format
 
     model, tokenizer = utils.load_model(model_name, quant=True)
-    prompts = utils.get_questions(tokenizer)
+    prompts = utils.get_questions_no_it()
+    # prompts = utils.get_questions(tokenizer)
     
     print(prompts[0])
     print(len(prompts))

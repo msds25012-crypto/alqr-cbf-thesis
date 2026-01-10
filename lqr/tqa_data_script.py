@@ -99,39 +99,85 @@ def get_questions(tokenizer):
 
     return prompts
 
+def get_questions_no_it():
+    gen = load_dataset("truthfulqa/truthful_qa", "generation")
+    ds_gen = gen["validation"]
+    shuffled = ds_gen.shuffle(seed=None)  
+
+    # print(shuffled[0])
+    questions = [shuffled[i]["question"] for i in range(len(shuffled)) if shuffled[i]["type"] == "Adversarial"]
+    for i in range(len(questions)):
+        questions[i] = "Q: " + questions[i] + " A:"
+    return questions
+
+
+def format_truthfulqa(question, choice):
+    return f"Q: {question} A: {choice}"
+
+def format_truthfulqa_end_q(question, choice, rand_question): 
+    return f"Q: {question} A: {choice} Q: {rand_question}"
+
+
+def tqa_prompts(): 
+    mc = load_dataset("truthfulqa/truthful_qa", "multiple_choice")
+    dataset = mc["validation"]
+    dataset = dataset.shuffle(seed=None)
+    true_prompts = []
+    false_prompts = []
+    for i in range(len(dataset)):
+        question = dataset[i]['question']
+        choices = dataset[i]['mc2_targets']['choices']
+        labels = dataset[i]['mc2_targets']['labels']
+
+        assert len(choices) == len(labels), (len(choices), len(labels))
+
+        for j in range(len(choices)): 
+            choice = choices[j]
+            prompt = format_truthfulqa(question, choice)
+            if labels[j] == 1:
+                true_prompts.append(prompt)
+            else:
+                false_prompts.append(prompt)
+
+    return true_prompts, false_prompts
+
 
 def main():
     # model_name = "google/gemma-2-2b"
-    model_name = "Qwen/Qwen2.5-3B-Instruct"
+    # model_name = "Qwen/Qwen2.5-3B-Instruct"
     # model_name = "meta-llama/Llama-3.1-8B-Instruct"
     # model_name = "google/gemma-2-9b-it"
     # model_name = "Qwen/Qwen2.5-14B-Instruct"
+    model_name = "meta-llama/Meta-Llama-3-8B"
     model, tokenizer = load_model(model_name, quant=True)
     # messages = [
     #     {"role": "user", "content": p} for p in prompt
     # ]
     # print(messages)
 
-    t_prompts = true_prompts(tokenizer)
-    f_prompts = false_prompts(tokenizer)
+    # t_prompts = true_prompts(tokenizer)
+    # f_prompts = false_prompts(tokenizer)
+    t_prompts, f_prompts = tqa_prompts()
+    # print(t_prompts[0])
+    # print(f_prompts[0])
     # print(promptywompty[0])
     # print(promptywompty[816])
     # print(len(promptywompty))
 
 
     dataguy = ContrastiveBuilder(model, tokenizer)
-    # filename = "Qwen2.5-3B-Instruct-false"
-    # dataguy.collect_data_batch(f_prompts, 200, filename)
-    # # dataguy.collect_data_batch(formatted_harmful_prompts, 1, filename)
-    # print("done with refused")
+    filename = "Llama-3-8B-false"
+    dataguy.collect_data_batch(f_prompts, 200, filename)
+    # dataguy.collect_data_batch(formatted_harmful_prompts, 1, filename)
+    print("done with refused")
 
-    # filename = "Qwen2.5-3B-Instruct-true"
-    # dataguy.collect_data_batch(t_prompts, 200, filename)
-    # # dataguy.collect_data_batch(formatted_safe_prompts, 1, filename)
-    # print("done with not refused")
+    filename = "Llama-3-8B-true"
+    dataguy.collect_data_batch(t_prompts, 200, filename)
+    # dataguy.collect_data_batch(formatted_safe_prompts, 1, filename)
+    print("done with not refused")
 
     # # for i in range(10):
-    filename = f"Qwen2.5-3B-Instruct-true_jac"
+    filename = f"Llama-3-8B-true_jac"
     dataguy.collect_jacobians(t_prompts, 50, filename)
     # dataguy.collect_jacobians(formatted_safe_prompts, 1, filename)
     print(f"done with jac")
