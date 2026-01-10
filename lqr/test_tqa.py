@@ -45,6 +45,9 @@ qwen_it_format = {"begin": "system\nYou are Qwen, created by Alibaba Cloud. You 
 gemma_it_format = {"begin": "user\n",
                  "end": "\nmodel\n"}
 
+no_it_format = {"begin": "Q: ",
+                 "end": "A:"}
+
 def load_file(filename):
     with open(PICKLE_JAR+filename+".pkl", "rb") as f:
         loaded_tensors = pickle.load(f)
@@ -132,37 +135,41 @@ def get_t_i_scores(tokenizer, outputs, it_format):
     h_evaluation_score = th.mean(th.tensor(h_classifications)).item()
     return t_evaluation_score, h_evaluation_score
 
-def run_trials(model, tokenizer, prompts, it_format, num_trials, A, X_contr, l_list=[1], q_list=[0.1], r_list=[10], qf_list=[0.1], k=50, do_sample=True, filename="json_out"):
+def run_trials(model, tokenizer, prompts, it_format, num_trials, A, X_contr, l_list=[1], q_list=[0.1], r_list=[10], qf_list=[0.1], k=50, do_sample=True, filename="json_out", batch_size=100):
     samples = random.sample(prompts, num_trials)
     # do_sample = False
     # print("lambda,q,r,qf,num_safeified,num_unsafeified,num_tox_un,num_tox_contr,dist1_base,dist2_base,dist3_base,dist1_steered,dist2_steered,dist3_steered, ppl_base, ppl_steered")
 
-    start_time = time.perf_counter()
-    # k=50
-    inputs = tokenizer(
-            samples, 
-            return_tensors="pt", 
-            padding=True,
-            truncation=True,
-        ).to(device)
-    input_ids = inputs["input_ids"]
-    attention_mask = inputs["attention_mask"]
+    output_str = []
+    for i in range(0, len(samples), batch_size):
+        batch = samples[i:i+batch_size]
+        start_time = time.perf_counter()
+        # k=50
+        inputs = tokenizer(
+                batch, 
+                return_tensors="pt", 
+                padding=True,
+                truncation=True,
+            ).to(device)
+        input_ids = inputs["input_ids"]
+        attention_mask = inputs["attention_mask"]
 
-    data_list = []
-    with th.no_grad():
-        output_un = model.generate(
-                        input_ids=input_ids,
-                        attention_mask=attention_mask,
-                        max_new_tokens=k,
-                        return_dict_in_generate=True,
-                        do_sample=do_sample,
-                        temperature=0.7,
-                        use_cache=False,
-                        pad_token_id=tokenizer.eos_token_id,
-                    )
+        data_list = []
+        with th.no_grad():
+            output_un = model.generate(
+                            input_ids=input_ids,
+                            attention_mask=attention_mask,
+                            max_new_tokens=k,
+                            return_dict_in_generate=True,
+                            do_sample=do_sample,
+                            temperature=0.7,
+                            use_cache=False,
+                            pad_token_id=tokenizer.eos_token_id,
+                        )
 
-    output_str = tokenizer.batch_decode(output_un.sequences, skip_special_tokens=True)
-    postbase_time = time.perf_counter()
+        output = tokenizer.batch_decode(output_un.sequences, skip_special_tokens=True)
+        output_str.extend(output)
+        postbase_time = time.perf_counter()
 
     t, i = get_t_i_scores(tokenizer, output_str, it_format)
     print(output_str[0:10])
@@ -179,12 +186,16 @@ def run_trials(model, tokenizer, prompts, it_format, num_trials, A, X_contr, l_l
         for r in r_list:
             for qf in qf_list:
                 steer_contr = LQRSteering(model, tokenizer, q=q,r=r,qf=qf, A=A, contrastive_vecs=X_contr, perserve_mem=True)
+                temp_data = []
                 for l in l_list:
                     contr_completions = []
                     un_completions = []
                     
-                    contr_out = steer_contr.track_setpoint(samples, k, lmbda=l, do_sample=do_sample)
-                    
+                    contr_out = []
+                    for i in range(0, len(samples), batch_size):
+                        batch = samples[i:i+batch_size]
+                        contr = steer_contr.track_setpoint(batch, k, lmbda=l, do_sample=do_sample)
+                        contr_out.extend(contr)
                     # print(f"Q = {q}, R = {r}, Qf = {qf}")
                     # print(f"STEERED:\n {contr_out}")
                     # for i, inp in enumerate(samples):
@@ -211,12 +222,17 @@ def run_trials(model, tokenizer, prompts, it_format, num_trials, A, X_contr, l_l
 
                     }
                     sweep_data_list.append(sweep_data)
+                    temp_data.append(sweep_data)
                     print(sweep_data)
                     # print(f"count steered: {count_steered}")
                     # print(f"count unsteered: {count_unsteered}")
                     # print(f"count steered non: {count_steered_non}")
                     # print(f"count unsteered non: {count_unsteered_non}")
+                print(f"Done with q: {q}, r: {r}, qf: {qf}")
                 del steer_contr
+                file_path = PATH + filename + f"q-{q}r-{r}-qf-{qf}.txt"
+                with open(file_path, 'w') as file:
+                    json.dump(temp_data, file, indent=4)
 
 
     data_list.append({"sweeps": sweep_data_list})
@@ -235,7 +251,7 @@ def main():
     # model_name = "Qwen/Qwen2.5-14B-Instruct"
 
     output_filename = "Qwen-2.5-3b-advers-sweep"
-    it_format = qwen_it_format
+    it_format = no_it_format
 
     model, tokenizer = utils.load_model(model_name, quant=True)
     prompts = utils.get_questions(tokenizer)
@@ -284,8 +300,8 @@ def main():
     # r_list = [1, 10]
     # qf_list = [0.1, 1, 10]
     # q_list = [1]
-    # r_list = [0.1]
-    # qf_list = [10]
+    # r_list = [1]
+    # qf_list = [0.1]
 
     # num_trials = 817
     num_trials = 437
