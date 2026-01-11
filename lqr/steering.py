@@ -8,6 +8,8 @@ import time
 # import tqdm
 from tqdm import tqdm
 import torch.nn.functional as F
+from sklearn.decomposition import PCA
+# import numpy as np
 
 class Mode(Enum):
     COLLECTING = 0
@@ -68,6 +70,9 @@ class LQRSteering:
 
         self.betas = None
         self.E_unit = None
+        self.setpoint_type = "linear"
+        self.basis2 = None
+        self.target_degree = None
 
         self.hooks = []
         self.mode = Mode.COLLECTING
@@ -181,14 +186,55 @@ class LQRSteering:
                 )
             )
 
+    # def get_angular_sp(x, target_degree, basis1, basis2):
+    def get_angular_sp(self, x, layer_idx):
+        basis1 = self.E[layer_idx]
+        basis2 = self.basis2
+        assert len(basis1.shape) == 1
+        assert len(basis2.shape) == 1
+        assert basis1.shape == basis2.shape
+
+        n = basis1.shape[-1]
+
+        # ensure bases are orthonormal
+        u = basis1 / th.linalg.norm(basis1)
+        v = basis2 - (basis2 @ u) * u
+        v /= th.linalg.norm(v)
+
+        theta = th.deg2rad(self.target_degree)
+        cos_theta = th.cos(theta)
+        sin_theta = th.sin(theta)
+
+        P = th.outer(u, u) + th.outer(v, v)
+
+        # rotate counter-clockwise
+        R_theta = th.tensor([[cos_theta, -sin_theta], [sin_theta, cos_theta]], dtype=th.float, device=self.device)
+
+        uv = th.column_stack([u, v])
+
+        rotated_component = uv @ R_theta @ th.tensor([1, 0], dtype=th.float, device=self.device)
+        Px = x @ P
+        scale = th.linalg.norm(Px, axis=-1, keepdims=True)
+
+        # result = x - Px + scale * rotated_component
+        e = -Px + scale * rotated_component
+
+        return e
+
     def hook_setpoint_tracking(self, layer_idx, module, input, output):
         # assume E_normed is unit vector in direction of contrastive feature
         x = input[0][:,-1,:]
         self.X[layer_idx] = x[-1,:]
-        v = self.E_unit[layer_idx]
 
-        alpha = th.tensor([self.betas[layer_idx] for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
-        e = alpha.squeeze(0).T @ v.unsqueeze(0)
+        if self.setpoint_type == "linear":
+            v = self.E_unit[layer_idx]
+            alpha = th.tensor([self.betas[layer_idx] for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
+            e = alpha.squeeze(0).T @ v.unsqueeze(0)
+        elif self.setpoint_type == "angular":
+            # print("DOING THE THING")
+            e = self.get_angular_sp(x, layer_idx)
+        else:
+            raise ValueError("Unsupported setpoint type")
         u_t = th.bmm(self.K[layer_idx].unsqueeze(0), th.transpose(e.unsqueeze(0),-2,-1)).squeeze(0).T
         self.U[layer_idx] = u_t[-1]
 
@@ -262,6 +308,7 @@ class LQRSteering:
 
     def track_setpoint(self, prompt, max_new_tokens, lmbda=1, do_sample=False, temp=0.7):
         self.mode = Mode.SETPOINT
+        self.setpoint_type = "linear"
 
         # inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
         inputs = self.tokenizer(
@@ -299,6 +346,44 @@ class LQRSteering:
         output_str = self.tokenizer.batch_decode(output.sequences, skip_special_tokens=True)
         return output_str
         
+    def track_angular_setpoint(self, prompt, max_new_tokens, target_degree, lmbda=1, do_sample=False, temp=0.7):
+        self.mode = Mode.SETPOINT
+        self.setpoint_type = "angular"
+        self.target_degree = th.tensor(target_degree)
+
+        # inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        inputs = self.tokenizer(
+            prompt, 
+            return_tensors="pt", 
+            padding=True,
+            truncation=True,
+        ).to(self.device)
+        input_ids = inputs["input_ids"]
+        attention_mask = inputs["attention_mask"]
+        self.X = th.zeros((self.T+1, self.n)).to(self.device)
+
+        refusal_dirs = self.E.cpu()
+        pca_model = PCA().fit(refusal_dirs)
+
+        components = pca_model.components_
+        self.basis2 = th.tensor(components[0].copy(), dtype=th.float, device=self.device)
+
+        with self:
+            output = self.model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=max_new_tokens,
+                return_dict_in_generate=True,
+                do_sample=do_sample,
+                temperature=temp,
+                use_cache=False,
+                pad_token_id=self.tokenizer.eos_token_id,
+                # **model_generation_kwargs, #
+            )
+
+        # output_str = self.tokenizer.decode(output.sequences[0], skip_special_tokens=True)
+        output_str = self.tokenizer.batch_decode(output.sequences, skip_special_tokens=True)
+        return output_str
 
     def track_tokens(self, nom_prompt, prompt, k=1):
         self.mode = Mode.COLLECTING

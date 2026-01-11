@@ -101,7 +101,10 @@ def run_trials(model, tokenizer, prompts, num_trials, A, X_contr, l_list=[1], q_
                     contr_completions = []
                     un_completions = []
                     
-                    contr_out = steer_contr.track_setpoint(samples, k, lmbda=l, do_sample=do_sample)
+                    # contr_out = steer_contr.track_setpoint(samples, k, lmbda=l, do_sample=do_sample)
+                    for angle in range(0,350,10):
+                    # for angle in range(0,350,180):
+                        contr_out = steer_contr.track_angular_setpoint(samples, k, target_degree=angle, lmbda=l, do_sample=do_sample)
                     
                     # print(f"Q = {q}, R = {r}, Qf = {qf}")
                     # print(f"STEERED:\n {contr_out}")
@@ -114,20 +117,21 @@ def run_trials(model, tokenizer, prompts, num_trials, A, X_contr, l_list=[1], q_
                     # print(f"unsteered completions: {un_completions}")
 
 
-                    count_steered = sum(any(ss in comp for ss in refusal_ss) for comp in contr_out)
-                    count_steered_non = sum(all(ss not in comp for ss in refusal_ss) for comp in contr_out)
-                    
-                    sweep_data = {
-                        "lambda": l,
-                        "Q": q,
-                        "R": r, 
-                        "Qf": qf,
-                        "steered refused": count_steered,
-                        "steered nonrefused": count_steered_non,
-                        "steered output": contr_out,
+                        count_steered = sum(any(ss in comp for ss in refusal_ss) for comp in contr_out)
+                        count_steered_non = sum(all(ss not in comp for ss in refusal_ss) for comp in contr_out)
+                        
+                        sweep_data = {
+                            "lambda": l,
+                            "Q": q,
+                            "R": r, 
+                            "Qf": qf,
+                            "steered refused": count_steered,
+                            "steered nonrefused": count_steered_non,
+                            "target angle": angle,
+                            "steered output": contr_out,
 
-                    }
-                    sweep_data_list.append(sweep_data)
+                        }
+                        sweep_data_list.append(sweep_data)
 
                     # print(f"count steered: {count_steered}")
                     # print(f"count unsteered: {count_unsteered}")
@@ -151,7 +155,7 @@ def main():
     # model_name = "Qwen/Qwen2.5-3B-Instruct"
     # model_name = "Qwen/Qwen2.5-14B-Instruct"
 
-    output_filename = "test"
+    output_filename = "test_angular"
 
     model, tokenizer = utils.load_model(model_name, quant=True)
     harmful_prompts = utils.get_refused_prompts()[416:]
@@ -195,12 +199,12 @@ def main():
     # r_list = [0.1, 1, 10]
     # qf_list = [0.1, 1]
 
-    q_list = [0.1]
+    q_list = [1]
     r_list = [1]
-    qf_list = [1]
+    qf_list = [0.1]
 
+    # num_trials = 1
     num_trials = 10
-    # num_trials = 10
     run_trials(
         model, 
         tokenizer, 
