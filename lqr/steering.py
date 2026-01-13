@@ -75,10 +75,13 @@ class LQRSteering:
         self.target_degree = None
 
         self.hooks = []
-        self.mode = Mode.COLLECTING
+        self.mode = None
         
 
+        self.setpoint_signals = []
         self.iter = 0
+
+        self.SIGNAL_COLLECT = False
 
 
     def hook_steering(self, layer_idx, module, input, output):
@@ -260,6 +263,53 @@ class LQRSteering:
                 )
             )
 
+    def hook_get_sp_signal(self, layer_idx, module, input, output):
+        x = input[0][:,-1,:]
+        v = self.E_unit[layer_idx]
+        raw_signal = th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
+        nm = th.norm(self.E[layer_idx])
+        # print(nm)
+        signal = raw_signal / nm
+        self.setpoint_signals.append(th.mean(signal).item())
+
+        if layer_idx == self.T-1:
+            if isinstance(output,tuple):
+                x = output[0][...,-1,:]
+            else: 
+                x = output[...,-1,:]
+            # x = input[0][:,-1,:]
+            if self.mode != None:
+                alpha = th.tensor([self.betas[layer_idx] for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
+                e = alpha.squeeze(0).T @ v.unsqueeze(0)
+                u_t = th.bmm(self.K[layer_idx].unsqueeze(0), th.transpose(e.unsqueeze(0),-2,-1)).squeeze(0).T
+                x = x + u_t
+                # print("here")
+                
+            v = self.E_unit[layer_idx+1]
+            # v = self.E_unit[-2]
+            raw_signal = th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
+            nm = th.norm(self.E[layer_idx+1])
+            # print(nm)
+            signal = raw_signal / nm
+            self.setpoint_signals.append(th.mean(signal).item())
+        return output
+
+    def register_setpoint_signal_hooks(self):
+        """Register the hooks."""
+
+        for layer_idx, layer in enumerate(self.model.model.layers):
+            def hook_wrapper(layer_idx):
+                def hook(module, input, output):
+                    return self.hook_get_sp_signal(layer_idx, module, input, output)
+
+                return hook
+
+            self.hooks.append(
+                layer.register_forward_hook(
+                    hook_wrapper(layer_idx)
+                )
+            )
+
     def remove_hooks(self):
         for hook in self.hooks:
             hook.remove()
@@ -274,6 +324,11 @@ class LQRSteering:
             self.register_tracking_hooks()
         elif self.mode == Mode.SETPOINT:
             self.register_setpoint_tracking_hooks()
+        else:
+            print("generating with no steering applied")
+
+        if self.SIGNAL_COLLECT:
+            self.register_setpoint_signal_hooks()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -309,7 +364,8 @@ class LQRSteering:
     def track_setpoint(self, prompt, max_new_tokens, lmbda=1, do_sample=False, temp=0.7):
         self.mode = Mode.SETPOINT
         self.setpoint_type = "linear"
-
+        self.SIGNAL_COLLECT = True
+        self.setpoint_signals = []
         # inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
         inputs = self.tokenizer(
             prompt, 
@@ -526,6 +582,47 @@ class LQRSteering:
 
         # print(f"Total time: {end_time - start_time}")
         return output_str
+
+    def generate_and_collect(self, prompt, max_new_tokens=1, do_sample=True, temp=0.7):
+        self.setpoint_type = "linear"
+        self.SIGNAL_COLLECT = True
+
+        self.E_unit = th.zeros_like(self.E)
+        for i, e in enumerate(self.E):
+            # print(f"e: {e}")
+            nrm = th.linalg.norm(e)
+            self.E_unit[i] = e / nrm
+
+        # inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        inputs = self.tokenizer(
+            prompt, 
+            return_tensors="pt", 
+            padding=True,
+            truncation=True,
+        ).to(self.device)
+        input_ids = inputs["input_ids"]
+        attention_mask = inputs["attention_mask"]
+        # self.X = th.zeros((self.T+1, self.n)).to(self.device)
+
+        with self:
+            output = self.model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=max_new_tokens,
+                return_dict_in_generate=True,
+                do_sample=do_sample,
+                temperature=temp,
+                use_cache=False,
+                pad_token_id=self.tokenizer.eos_token_id,
+                # **model_generation_kwargs, #
+            )
+
+        # output_str = self.tokenizer.decode(output.sequences[0], skip_special_tokens=True)
+        # output_str = self.tokenizer.batch_decode(output.sequences, skip_special_tokens=True)
+
+        signals = self.setpoint_signals
+        self.setpoint_signals = []
+        return signals
 
     def complete_rollout(self, prompt, k=1):
         self.mode = Mode.COLLECTING
