@@ -76,6 +76,7 @@ class LQRSteering:
 
         self.hooks = []
         self.mode = None
+        self.ALL_TOKENS = False
         
 
         self.setpoint_signals = []
@@ -226,26 +227,61 @@ class LQRSteering:
 
     def hook_setpoint_tracking(self, layer_idx, module, input, output):
         # assume E_normed is unit vector in direction of contrastive feature
-        x = input[0][:,-1,:]
-        self.X[layer_idx] = x[-1,:]
 
-        if self.setpoint_type == "linear":
-            v = self.E_unit[layer_idx]
-            alpha = th.tensor([self.betas[layer_idx] for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
-            e = alpha.squeeze(0).T @ v.unsqueeze(0)
-        elif self.setpoint_type == "angular":
-            # print("DOING THE THING")
-            e = self.get_angular_sp(x, layer_idx)
+        if self.ALL_TOKENS:
+            x = input[0]
+            self.X[layer_idx] = x[-1,-1,:]
+            if self.setpoint_type == "linear":
+                v = self.E_unit[layer_idx]
+                # print(f"x shape: {x.shape}")
+                # print(f"v shape: {v.shape}")
+                b_mat = self.betas[layer_idx] * th.ones([x.shape[0], x.shape[1]], device=self.device)
+                probe_mat = x @ v.T
+                # print(f"bmat shape: {b_mat.shape}")
+                # print(f"probe mat shape: {probe_mat.shape}")
+                alpha = b_mat - probe_mat
+                v_mat = v.expand(x.shape[0], x.shape[1], -1)
+                # print(f"v_mat shape: {v_mat.shape}")
+                e = alpha.unsqueeze(-1) * v_mat
+                # print(f"e shape: {e.shape}")
+            elif self.setpoint_type == "angular":
+                # print("DOING THE THING")
+                e = self.get_angular_sp(x, layer_idx)
+            else:
+                raise ValueError("Unsupported setpoint type")
+
+            u_t = e @ self.K[layer_idx].T
+            self.U[layer_idx] = u_t[-1,-1]
+
+            if isinstance(output,tuple):
+                # print(f"tuple output: {output}")
+                # print(f"tuple wtf output: {output[0].shape}")
+                output[0][...] = output[0] + u_t
+            else: 
+                output = output + u_t
+            return output
+
         else:
-            raise ValueError("Unsupported setpoint type")
-        u_t = th.bmm(self.K[layer_idx].unsqueeze(0), th.transpose(e.unsqueeze(0),-2,-1)).squeeze(0).T
-        self.U[layer_idx] = u_t[-1]
+            x = input[0][:,-1,:]
+            self.X[layer_idx] = x[-1,:]
 
-        if isinstance(output,tuple):
-            output[0][...,-1,:] = output[0][...,-1,:] + u_t
-        else: 
-            output[...,-1,:] = output[...,-1,:] + u_t
-        return output
+            if self.setpoint_type == "linear":
+                v = self.E_unit[layer_idx]
+                alpha = th.tensor([self.betas[layer_idx] for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
+                e = alpha.squeeze(0).T @ v.unsqueeze(0)
+            elif self.setpoint_type == "angular":
+                # print("DOING THE THING")
+                e = self.get_angular_sp(x, layer_idx)
+            else:
+                raise ValueError("Unsupported setpoint type")
+            u_t = th.bmm(self.K[layer_idx].unsqueeze(0), th.transpose(e.unsqueeze(0),-2,-1)).squeeze(0).T
+            self.U[layer_idx] = u_t[-1]
+
+            if isinstance(output,tuple):
+                output[0][...,-1,:] = output[0][...,-1,:] + u_t
+            else: 
+                output[...,-1,:] = output[...,-1,:] + u_t
+            return output
 
     def register_setpoint_tracking_hooks(self):
         """Register the hooks."""
@@ -269,7 +305,8 @@ class LQRSteering:
         raw_signal = th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
         nm = th.norm(self.E[layer_idx])
         # print(nm)
-        signal = raw_signal / nm
+        # signal = raw_signal / nm
+        signal = raw_signal
         self.setpoint_signals.append(th.mean(signal).item())
 
         if layer_idx == self.T-1:
@@ -290,7 +327,8 @@ class LQRSteering:
             raw_signal = th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
             nm = th.norm(self.E[layer_idx+1])
             # print(nm)
-            signal = raw_signal / nm
+            # signal = raw_signal / nm
+            signal = raw_signal
             self.setpoint_signals.append(th.mean(signal).item())
         return output
 
