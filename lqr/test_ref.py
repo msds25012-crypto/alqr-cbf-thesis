@@ -203,8 +203,8 @@ def run_trials_ang(model, tokenizer, prompts, num_trials, A, X_contr, l_list=[1]
                     contr_completions = []
                     un_completions = []
                     # contr_out = steer_contr.track_setpoint(samples, k, lmbda=l, do_sample=do_sample)
-                    # for angle in range(0,350,10):
-                    for angle in range(-20,20,5):
+                    for angle in range(0,350,30):
+                    # for angle in range(-20,20,5):
                         contr_out = steer_contr.track_angular_setpoint(samples, k, target_degree=angle, lmbda=l, do_sample=do_sample)
                     
                     # print(f"Q = {q}, R = {r}, Qf = {qf}")
@@ -261,7 +261,7 @@ def main():
     # model_name = "Qwen/Qwen2.5-3B-Instruct"
     # model_name = "Qwen/Qwen2.5-14B-Instruct"
 
-    output_filename = "test_angular_all_tokens"
+    output_filename = "test_angular_qwen"
 
     model, tokenizer = utils.load_model(model_name, quant=True)
     harmful_prompts = utils.get_refused_prompts()[416:]

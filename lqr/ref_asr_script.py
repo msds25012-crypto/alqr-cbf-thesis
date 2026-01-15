@@ -2,27 +2,27 @@ import test_ref as tref
 import json
 
 def main():
-    # prompts = utils.get_refused_prompts()
-    # model_name = "meta-llama/Llama-3.1-8B-Instruct"
-    # model_name = "Qwen/Qwen2.5-3B-Instruct"
-    # model_name = "Qwen/Qwen2.5-14B-Instruct"
-    model_name = "google/gemma-2-9B-it"
+    # # prompts = utils.get_refused_prompts()
+    # # model_name = "meta-llama/Llama-3.1-8B-Instruct"
+    model_name = "Qwen/Qwen2.5-3B-Instruct"
+    # # model_name = "Qwen/Qwen2.5-14B-Instruct"
+    # model_name = "google/gemma-2-9B-it"
 
-    output_filename = "gemma-2-9b-TEMPSWEEP"
+    output_filename = "test_angular"
 
-    l_list = [0.5, 1, 1.5, 2, 2.5]
-    # l_list = [1]
+    # l_list = [0.5, 1, 1.5, 2, 2.5]
+    l_list = [1]
 
     # q_list = [0.1]
     # r_list = [1]
     # qf_list = [0.1]
 
-    # q_list = [0.1]
-    q_list = [0.1, 1, 10]
-    r_list = [0.1, 1, 10]
-    qf_list = [0.1, 1, 10]
-    # r_list = [1]
-    # qf_list = [1]
+    q_list = [1]
+    # q_list = [0.1, 1, 10]
+    # r_list = [0.1, 1, 10]
+    # qf_list = [0.1, 1, 10]
+    r_list = [1]
+    qf_list = [1]
 
     num_trials = 104
 
@@ -31,17 +31,17 @@ def main():
     # nonref = load_file("llama-3.1-8B-it-nonref")
     # jac = load_file("llama-3.1-8B-it-nonref_jac")
     
-    # ref = tref.load_file("Qwen2.5-3B-Instruct-ref")
-    # nonref = tref.load_file("Qwen2.5-3B-Instruct-nonref")
-    # jac = tref.load_file("Qwen2.5-3B-Instruct-nonref_jac")
+    ref = tref.load_file("Qwen2.5-3B-Instruct-ref")
+    nonref = tref.load_file("Qwen2.5-3B-Instruct-nonref")
+    jac = tref.load_file("Qwen2.5-3B-Instruct-nonref_jac")
 
     # ref = load_file("Qwen2.5-14B-Instruct-ref")
     # nonref = load_file("Qwen2.5-14B-Instruct-nonref")
     # jac = load_file("Qwen2.5-14B-Instruct-nonref_jac")
 
-    ref = tref.load_file("gemma-2-9b-it-ref")
-    nonref = tref.load_file("gemma-2-9b-it-nonref")
-    jac = tref.load_file("gemma-2-9b-it-nonref_jac")
+    # ref = tref.load_file("gemma-2-9b-it-ref")
+    # nonref = tref.load_file("gemma-2-9b-it-nonref")
+    # jac = tref.load_file("gemma-2-9b-it-nonref_jac")
 
 
     model, tokenizer = tref.utils.load_model(model_name, quant=True)
@@ -65,7 +65,7 @@ def main():
     del X
     del X_ref
     
-    k=200
+    k=80
     tref.run_trials(
         model, 
         tokenizer, 
@@ -78,7 +78,7 @@ def main():
         r_list, 
         qf_list,
         k,
-        True,
+        False,
         output_filename
     )
 
@@ -86,7 +86,7 @@ def main():
 
     import asr as asr
 
-    it_format = asr.gemma_it_format
+    it_format = asr.qwen_it_format
 
     data_file_path = asr.PATH + output_filename + ".txt"
     with open(data_file_path, 'r') as file:

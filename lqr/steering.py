@@ -221,6 +221,8 @@ class LQRSteering:
         scale = th.linalg.norm(Px, axis=-1, keepdims=True)
 
         # result = x - Px + scale * rotated_component
+        # return result
+
         e = -Px + scale * rotated_component
 
         return e

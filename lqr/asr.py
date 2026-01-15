@@ -68,6 +68,11 @@ qwen_it_format = {
                   "end": "\nassistant\n" 
                   }
 
+gemma_it_format = {
+                  "begin": "user\n",
+                  "end": "\nmodel\n" 
+                  }
+
 
 quant_config = BitsAndBytesConfig(
     load_in_4bit=True,          # or load_in_8bit=True
@@ -123,9 +128,9 @@ def harmbench_judge(inputs, batch_size=10):
     return evaluation_score.item()
 
 def main():
-    it_format = qwen_it_format
+    it_format = gemma_it_format
 
-    filename = "qwen_test"
+    filename = "test_angular"
     data_file_path = PATH + filename + ".txt"
     with open(data_file_path, 'r') as file:
         data = json.load(file)
