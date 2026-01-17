@@ -49,9 +49,11 @@ no_it_format = {"begin": "Q: ",
                  "end": "A:"}
 
 def load_file(filename):
-    with open(PICKLE_JAR+filename+".pkl", "rb") as f:
-        loaded_tensors = pickle.load(f)
-    return loaded_tensors
+    try:
+        with open(PICKLE_JAR + filename + ".pkl", "rb") as f:
+            return pickle.load(f)
+    except FileNotFoundError:
+        return None
 
 def info_pipeline(prompts, tokenizer, BATCH_SIZE):
     pred_info_label = []
@@ -162,6 +164,8 @@ def run_trials(model, tokenizer, prompts, it_format, num_trials, A, X_contr, l_l
                             max_new_tokens=k,
                             return_dict_in_generate=True,
                             do_sample=do_sample,
+                            top_p=0.9,
+                            repetition_penalty=1.1,
                             temperature=0.7,
                             use_cache=False,
                             pad_token_id=tokenizer.eos_token_id,
@@ -173,9 +177,11 @@ def run_trials(model, tokenizer, prompts, it_format, num_trials, A, X_contr, l_l
 
     t, i = get_t_i_scores(tokenizer, output_str, it_format)
     print(output_str[0:10])
-    data = {"unsteered output": output_str, 
+    data = {
             "unsteered t": t,
-            "unsteered i": i
+            "unsteered i": i,
+            "unsteered output": output_str,
+            "prompts": samples
             }
     data_list.append(data)
     print(f"BASE MODEL: t: {t}, i: {i}")
@@ -228,11 +234,11 @@ def run_trials(model, tokenizer, prompts, it_format, num_trials, A, X_contr, l_l
                     # print(f"count unsteered: {count_unsteered}")
                     # print(f"count steered non: {count_steered_non}")
                     # print(f"count unsteered non: {count_unsteered_non}")
-                print(f"Done with q: {q}, r: {r}, qf: {qf}")
-                del steer_contr
-                file_path = PATH + filename + f"q-{q}r-{r}-qf-{qf}.txt"
-                with open(file_path, 'w') as file:
-                    json.dump(temp_data, file, indent=4)
+                # print(f"Done with q: {q}, r: {r}, qf: {qf}")
+                # del steer_contr
+                # file_path = PATH + filename + f"q-{q}r-{r}-qf-{qf}.txt"
+                # with open(file_path, 'w') as file:
+                #     json.dump(temp_data, file, indent=4)
 
 
     data_list.append({"sweeps": sweep_data_list})
@@ -247,33 +253,50 @@ def main():
     # prompts = utils.get_refused_prompts()
     # model_name = "meta-llama/Llama-3.1-8B-Instruct"
     # model_name = "google/gemma-2-9B-it"
-    model_name = "Qwen/Qwen2.5-3B-Instruct"
+    # model_name = "Qwen/Qwen2.5-3B-Instruct"
+    model_name = "meta-llama/Meta-Llama-3.1-8B"
     # model_name = "Qwen/Qwen2.5-14B-Instruct"
 
-    output_filename = "Qwen-2.5-3b-advers-sweep"
+    # output_filename = "Llama-3.1-8B-Instruct-sweep"
+    output_filename = "llama-3.1-8b-EXTREMEtest"
+    # it_format = qwen_it_format
+
+    print("Running test_tqa.py:", model_name)
+
     it_format = no_it_format
 
     model, tokenizer = utils.load_model(model_name, quant=True)
-    prompts = utils.get_questions_no_it()
     # prompts = utils.get_questions(tokenizer)
+    # prompts = utils.get_questions_no_it()
+    prompts = utils.get_all_questions_no_it()
     
     print(prompts[0])
     print(len(prompts))
-    # ref = load_file("gemma-2-9b-it-ref")
-    # nonref = load_file("gemma-2-9b-it-nonref")
-    # jac = load_file("gemma-2-9b-it-nonref_jac")
 
-    # ref = load_file("Llama-3.1-8B-Instruct-ref")
-    # nonref = load_file("Llama-3.1-8B-Instruct-nonref")
-    # jac = load_file("Llama-3.1-8B-Instruct-nonref_jac")
+
+    # true = load_file("Llama-3.1-8B-Instruct-true")
+    # false = load_file("Llama-3.1-8B-Instruct-false")
+    # jac = load_file("Llama-3.1-8B-Instruct-true_jac")
     
-    true = load_file("Qwen2.5-3B-Instruct-true")
-    false = load_file("Qwen2.5-3B-Instruct-false")
-    jac = load_file("Qwen2.5-3B-Instruct-true_jac")
+    # true = load_file("Qwen2.5-3B-Instruct-true")
+    # false = load_file("Qwen2.5-3B-Instruct-false")
+    # jac = load_file("Qwen2.5-3B-Instruct-true_jac")
 
-    # ref = load_file("Qwen2.5-14B-Instruct-ref")
-    # nonref = load_file("Qwen2.5-14B-Instruct-nonref")
-    # jac = load_file("Qwen2.5-14B-Instruct-nonref_jac")
+    # true = load_file("Llama-3-8B-true")
+    # false = load_file("Llama-3-8B-false")
+    # jac = load_file("Llama-3-8B-true_jac")
+
+    true = load_file("Llama-3.1-8B-true")
+    false = load_file("Llama-3.1-8B-false")
+    jac = load_file("Llama-3.1-8B-true_jac")
+
+    # true = load_file("Qwen2.5-14B-Instruct-true")
+    # false = load_file("Qwen2.5-14B-Instruct-false")
+    # jac = load_file("Qwen2.5-14B-Instruct-true_jac")
+
+    # true = load_file("gemma-2-9b-it-true")
+    # false = load_file("gemma-2-9b-it-false")
+    # jac = load_file("gemma-2-9b-it-true_jac")
 
     X = true["X"]
     X_f = false["X"]
@@ -287,25 +310,30 @@ def main():
     X_contr = X - X_f
     del X
     del X_f
-    l_list = [0.5, 1, 1.5, 2, 2.5]
-    # l_list = [0.5]
+    # l_list = [0.5, 1, 1.5, 2, 2.5]
+    l_list = [3, 3.5, 4]
+    # l_list = [1]
+
+    q_list = [0.1]
+    r_list = [1]
+    qf_list = [0.1]
 
     # q_list = [0.1, 1]
     # r_list = [0.1, 1, 10]
-    # qf_list = [0.1, 1]
+    # qf_list = [0.1, 1, 10]
 
-    q_list = [0.1, 1]
-    r_list = [0.1, 1, 10]
-    qf_list = [0.1, 1, 10]
+    # q_list = [0.1, 1]
+    # r_list = [0.1, 1, 10]
+    # qf_list = [0.1, 1, 10]
     # q_list = [1, 10]
     # r_list = [1, 10]
     # qf_list = [0.1, 1, 10]
-    # q_list = [1]
+    # q_list = [0.1]
     # r_list = [1]
-    # qf_list = [0.1]
+    # qf_list = [1]
 
-    # num_trials = 817
-    num_trials = 437
+    num_trials = 817
+    # num_trials = 437
     # num_trials = 15
     run_trials(
         model, 

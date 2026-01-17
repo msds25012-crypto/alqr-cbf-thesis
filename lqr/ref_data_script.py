@@ -49,8 +49,8 @@ def get_safe_prompts():
 
 def main():
     # model_name = "google/gemma-2-2b"
-    model_name = "Qwen/Qwen2.5-3B-Instruct"
-    # model_name = "meta-llama/Llama-3.1-8B-Instruct"
+    # model_name = "Qwen/Qwen2.5-3B-Instruct"
+    model_name = "meta-llama/Llama-3.1-8B-Instruct"
     # model_name = "google/gemma-2-9b-it"
     # model_name = "Qwen/Qwen2.5-14B-Instruct"
     model, tokenizer = load_model(model_name, quant=True)
@@ -78,21 +78,21 @@ def main():
 
 
     dataguy = ContrastiveBuilder(model, tokenizer)
-    # filename = "Qwen2.5-3B-Instruct-ref"
-    # dataguy.collect_data_batch(formatted_harmful_prompts, 416, filename)
-    # # dataguy.collect_data_batch(formatted_harmful_prompts, 1, filename)
-    # print("done with refused")
+    filename = "Llama-3.1-8B-Instruct-ref"
+    dataguy.collect_data_batch(formatted_harmful_prompts, 416, filename)
+    # dataguy.collect_data_batch(formatted_harmful_prompts, 1, filename)
+    print("done with refused")
 
-    # filename = "Qwen2.5-3B-Instruct-nonref"
-    # dataguy.collect_data_batch(formatted_safe_prompts, 512, filename)
-    # # dataguy.collect_data_batch(formatted_safe_prompts, 1, filename)
-    # print("done with not refused")
+    filename = "Llama-3.1-8B-Instruct-nonref"
+    dataguy.collect_data_batch(formatted_safe_prompts, 512, filename)
+    # dataguy.collect_data_batch(formatted_safe_prompts, 1, filename)
+    print("done with not refused")
 
     # # for i in range(10):
-    filename = f"Qwen2.5-3B-Instruct-nonref_jac"
-    dataguy.collect_jacobians(formatted_safe_prompts, 15, filename)
-    # dataguy.collect_jacobians(formatted_safe_prompts, 1, filename)
-    print(f"done with jac")
+    # filename = f"Qwen2.5-3B-Instruct-nonref_jac"
+    # dataguy.collect_jacobians(formatted_safe_prompts, 15, filename)
+    # # dataguy.collect_jacobians(formatted_safe_prompts, 1, filename)
+    # print(f"done with jac")
 
 if __name__ == "__main__":
     main()

@@ -76,7 +76,7 @@ class LQRSteering:
 
         self.hooks = []
         self.mode = None
-        self.ALL_TOKENS = False
+        self.ALL_TOKENS = True
         
 
         self.setpoint_signals = []
@@ -432,6 +432,8 @@ class LQRSteering:
                 max_new_tokens=max_new_tokens,
                 return_dict_in_generate=True,
                 do_sample=do_sample,
+                top_p=0.3,
+                repetition_penalty=1.2 if do_sample else None,
                 temperature=temp,
                 use_cache=False,
                 pad_token_id=self.tokenizer.eos_token_id,

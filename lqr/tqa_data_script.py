@@ -99,15 +99,20 @@ def get_questions(tokenizer):
 
     return prompts
 
-def get_questions_no_it():
+def get_questions_no_it(adversarial=True):
     gen = load_dataset("truthfulqa/truthful_qa", "generation")
     ds_gen = gen["validation"]
     shuffled = ds_gen.shuffle(seed=None)  
 
     # print(shuffled[0])
-    questions = [shuffled[i]["question"] for i in range(len(shuffled)) if shuffled[i]["type"] == "Adversarial"]
-    for i in range(len(questions)):
-        questions[i] = "Q: " + questions[i] + " A:"
+    if adversarial:
+        questions = [shuffled[i]["question"] for i in range(len(shuffled)) if shuffled[i]["type"] == "Adversarial"]
+        for i in range(len(questions)):
+            questions[i] = "Q: " + questions[i] + " A:"
+    else:
+        questions = [shuffled[i]["question"] for i in range(len(shuffled))]
+        for i in range(len(questions)):
+            questions[i] = "Q: " + questions[i] + " A:"
     return questions
 
 
@@ -147,8 +152,9 @@ def main():
     # model_name = "Qwen/Qwen2.5-3B-Instruct"
     # model_name = "meta-llama/Llama-3.1-8B-Instruct"
     # model_name = "google/gemma-2-9b-it"
+    model_name = "google/gemma-2-2b"
     # model_name = "Qwen/Qwen2.5-14B-Instruct"
-    model_name = "meta-llama/Meta-Llama-3-8B"
+    # model_name = "meta-llama/Meta-Llama-3-8B"
     model, tokenizer = load_model(model_name, quant=True)
     # messages = [
     #     {"role": "user", "content": p} for p in prompt
@@ -166,19 +172,19 @@ def main():
 
 
     dataguy = ContrastiveBuilder(model, tokenizer)
-    filename = "Llama-3-8B-false"
+    filename = "gemma-2-2b-false"
     dataguy.collect_data_batch(f_prompts, 200, filename)
     # dataguy.collect_data_batch(formatted_harmful_prompts, 1, filename)
     print("done with refused")
 
-    filename = "Llama-3-8B-true"
+    filename = "gemma-2-2b-true"
     dataguy.collect_data_batch(t_prompts, 200, filename)
     # dataguy.collect_data_batch(formatted_safe_prompts, 1, filename)
     print("done with not refused")
 
     # # for i in range(10):
-    filename = f"Llama-3-8B-true_jac"
-    dataguy.collect_jacobians(t_prompts, 50, filename)
+    filename = f"gemma-2-2b-true_jac"
+    dataguy.collect_jacobians(t_prompts, 35, filename)
     # dataguy.collect_jacobians(formatted_safe_prompts, 1, filename)
     print(f"done with jac")
 

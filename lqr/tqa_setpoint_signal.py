@@ -8,10 +8,13 @@ from steering import LQRSteering
 from datasets import load_dataset
 import random
 import time
-import tqa_data_script as utils
+import tqa_data_script as tqautils
+import tox_data_script as toxutils
 import json
 import yaml
 import matplotlib.pyplot as plt
+from statsmodels.nonparametric.smoothers_lowess import lowess
+import numpy as np
 
 with open('config/config.yaml', 'r') as f:
     config_data = yaml.safe_load(f)
@@ -56,19 +59,31 @@ def run_trials(model, tokenizer, prompts, A, X_contr, l_list=[1], q=0.1, r=10, q
 
     print(signals_per_lambda)
     print(len(signals_per_lambda[0]))
-    plt.plot(output[0][1:], label=f"unsteered")
+
+    Xcn = th.norm(X_contr, dim=1).detach().cpu().numpy()
+    x_data = np.arange(1, len(Xcn)+1)
+
+    y_smooth = lowess(Xcn, x_data, frac=0.25, it=3)[:,1]
+    
+    normed_output = [o / y_smooth[i%len(y_smooth)] for i, o in enumerate(output[0])]
+    # plt.plot(output[0], label=f"unsteered")
+    plt.plot(normed_output, label=f"unsteered")
+
     for i, row in enumerate(signals_per_lambda):
         # temp = [n / signals_per_lambda[1][1+i] for i, n in enumerate(row[1:])]
 
-        # plt.plot(temp, label=f"lambda = {l_list[i]}")
-        plt.plot(row[1:], label=f"lambda = {l_list[i]}")
+        temp = [n / y_smooth[i%len(y_smooth)] for i, n in enumerate(row)]
+        plt.plot(temp, label=f"lambda = {l_list[i]}")
+        # plt.plot(row, label=f"lambda = {l_list[i]}")
         plt.axhline(y=l_list[i], color='red', linestyle='--', linewidth=1)
 
     # plt.plot(mean_list, linewidth=3, color="black", label="Mean")
 
     plt.legend()
     # plt.savefig("llama_lambda_track_ratio.png")
-    plt.savefig("llama_lambda_track.png")
+    # plt.savefig("gemma-2-9b_lambda_track.png")
+    plt.savefig("gemma-2-2b_lambda_track.png")
+    # plt.savefig("gemma-2-9b_lambda_track_ratio.png")
     
                     
 
@@ -85,57 +100,84 @@ def main():
     # prompts = utils.get_refused_prompts()
     # model_name = "meta-llama/Llama-3.1-8B-Instruct"
     # model_name = "google/gemma-2-9B-it"
-    model_name = "meta-llama/Llama-3.1-8B-Instruct"
+    # model_name = "meta-llama/Llama-3.1-8B-Instruct"
     # model_name = "Qwen/Qwen2.5-3B-Instruct"
     # model_name = "Qwen/Qwen2.5-14B-Instruct"
+    model_name = "google/gemma-2-2b"
+    # model_name = "google/gemma-2-9b"
 
     # output_filename = "Llama-3.1-8B-Inst-advers-sweep"
 
-    model, tokenizer = utils.load_model(model_name, quant=True)
+    model, tokenizer = toxutils.load_model(model_name, quant=True)
 
     print(f"model layers: {len(model.model.layers)}")
-    prompts = utils.get_questions_no_it()
+# def get_tox_prompts(lb, ub):
+    prompts = toxutils.get_tox_prompts(0.9,1)
     # prompts = utils.get_questions(tokenizer)
     
     print(prompts[0])
     print(len(prompts))
 
+    tox = load_file("gemma-2-2b-tox")
+    nontox = load_file("gemma-2-2b-nontox")
+    jac = load_file("gemma-2-2b-nontox_jac")
+    # tox = load_file("gemma-2-9b-tox")
+    # nontox = load_file("gemma-2-9b-nontox")
+    # jac = load_file("gemma-2-9b-nontox_jac")
+
+    X = nontox["X"]
+    A = jac["A"]
+    X_tox = tox["X"]
+    X_contr = X - X_tox
+
+    mid = X_contr/2
+    mp = X_tox + mid
+
+    # E_unit = th.zeros_like(X_contr)
+    # for i, e in enumerate(X_contr):
+    #         # print(f"e: {e}")
+    #     nrm = th.linalg.norm(e)
+    #     E_unit[i] = e / nrm
+    # print(f"mid norm: {th.norm(mp,dim=1)}")
+    # print(f"mid eeeeeee: {(mp*E_unit).sum(dim=1)}")
     
     # true = load_file("Qwen2.5-3B-Instruct-true")
     # false = load_file("Qwen2.5-3B-Instruct-false")
     # jac = load_file("Qwen2.5-3B-Instruct-true_jac")
 
-    true = load_file("Llama-3.1-8B-Instruct-true")
-    false = load_file("Llama-3.1-8B-Instruct-false")
-    jac = load_file("Llama-3.1-8B-Instruct-true_jac")
+    # true = load_file("Llama-3.1-8B-Instruct-true")
+    # false = load_file("Llama-3.1-8B-Instruct-false")
+    # jac = load_file("Llama-3.1-8B-Instruct-true_jac")
 
-    X = true["X"]
-    X_f = false["X"]
-    A = jac["A"]
-    print(f"X device {X.device}")
+    # X = true["X"]
+    # X_f = false["X"]
+    # A = jac["A"]
+    # print(f"X device {X.device}")
 
-    print(f"X shape: {X.shape}")
-    print(f"X_ref shape: {X_f.shape}")
-    print(f"A shape: {A.shape}")
+    # print(f"X shape: {X.shape}")
+    # print(f"X_ref shape: {X_f.shape}")
+    # print(f"A shape: {A.shape}")
 
-    X_contr = X - X_f
-    print(f"X: {X}")
-    print(f"X norm: {th.norm(X,dim=1)}")
-    print(f"Xf: {X_f}")
-    print(f"Xf norm: {th.norm(X_f,dim=1)}")
-    print(f"contr: {X_contr}")
+    # X_contr = X - X_f
+    # print(f"X: {X}")
+    # print(f"X norm: {th.norm(X,dim=1)}")
+    # print(f"Xf: {X_f}")
+    # print(f"Xf norm: {th.norm(X_f,dim=1)}")
+    # print(f"contr: {X_contr}")
     print(f"contr norm: {th.norm(X_contr,dim=1)}")
-    del X
-    del X_f
+    # del X
+    # del X_f
     # l_list = [0.5, 1, 1.5, 2, 2.5]
-    l_list = [0.5, 1, 1.5, 2, 2.5]
+    # l_list = [0.5, 1, 1.5, 2, 2.5]
+    # l_list = [-5, -1, 1, 5]
+    l_list = [0.0, 1.5, 3]
 
     # q_list = [0.1, 1]
     # r_list = [0.1, 1, 10]
     # qf_list = [0.1, 1]
 
     q = 1
-    r = 10
+    r = 1
     qf = 10
 
     # num_trials = 817
@@ -145,7 +187,8 @@ def main():
     run_trials(
         model, 
         tokenizer, 
-        prompts[:25], 
+        # prompts[:1], 
+        ["kitty"], 
         A, 
         X_contr, 
         l_list, 

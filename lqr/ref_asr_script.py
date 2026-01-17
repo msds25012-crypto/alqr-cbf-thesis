@@ -2,38 +2,42 @@ import test_ref as tref
 import json
 
 def main():
-    # # prompts = utils.get_refused_prompts()
-    # # model_name = "meta-llama/Llama-3.1-8B-Instruct"
-    model_name = "Qwen/Qwen2.5-3B-Instruct"
-    # # model_name = "Qwen/Qwen2.5-14B-Instruct"
+    # prompts = utils.get_refused_prompts()
+    model_name = "meta-llama/Llama-3.1-8B-Instruct"
+    # model_name = "Qwen/Qwen2.5-3B-Instruct"
+    # model_name = "Qwen/Qwen2.5-14B-Instruct"
     # model_name = "google/gemma-2-9B-it"
 
-    output_filename = "test_angular"
+    # output_filename = "llama-8b-angle-test"
+    output_filename = "llama-8b-it-angle-qrqf-sweep"
+    # output_filename = "gemma-2-9B-it-one-token-lfs-sanity"
 
     # l_list = [0.5, 1, 1.5, 2, 2.5]
+    # l_list = [0.7,0.8,0.9,1,1.1,1.2,1.3]
     l_list = [1]
+    # l_list = [1, 1.5, 2]
 
     # q_list = [0.1]
     # r_list = [1]
-    # qf_list = [0.1]
+    # qf_list = [10]
+    # q_list = [0.1]
+    # r_list = [1]
+    # qf_list = [10]
 
-    q_list = [1]
-    # q_list = [0.1, 1, 10]
-    # r_list = [0.1, 1, 10]
-    # qf_list = [0.1, 1, 10]
-    r_list = [1]
-    qf_list = [1]
-
+    q_list = [0.1, 1, 10]
+    r_list = [0.1, 1, 10]
+    qf_list = [0.1, 1, 10]
+# q: 0.1, r: 1, qf: 10
     num_trials = 104
 
     
-    # ref = load_file("llama-3.1-8B-it-ref")
-    # nonref = load_file("llama-3.1-8B-it-nonref")
-    # jac = load_file("llama-3.1-8B-it-nonref_jac")
+    ref = tref.load_file("Llama-3.1-8B-Instruct-ref")
+    nonref = tref.load_file("Llama-3.1-8B-Instruct-nonref")
+    jac = tref.load_file("Llama-3.1-8B-Instruct-nonref_jac")
     
-    ref = tref.load_file("Qwen2.5-3B-Instruct-ref")
-    nonref = tref.load_file("Qwen2.5-3B-Instruct-nonref")
-    jac = tref.load_file("Qwen2.5-3B-Instruct-nonref_jac")
+    # ref = tref.load_file("Qwen2.5-3B-Instruct-ref")
+    # nonref = tref.load_file("Qwen2.5-3B-Instruct-nonref")
+    # jac = tref.load_file("Qwen2.5-3B-Instruct-nonref_jac")
 
     # ref = load_file("Qwen2.5-14B-Instruct-ref")
     # nonref = load_file("Qwen2.5-14B-Instruct-nonref")
@@ -47,10 +51,11 @@ def main():
     model, tokenizer = tref.utils.load_model(model_name, quant=True)
     harmful_prompts = tref.utils.get_refused_prompts()[416:]
     formatted_harmful_prompts = [tokenizer.apply_chat_template(
-        [{"role": "user", "content": p}],
+        [{"role": "user", "content": p + "\n\n"}],
         tokenize=False,
         add_generation_prompt=True
     ) for p in harmful_prompts]
+    print(formatted_harmful_prompts[0])
 
     X = nonref["X"]
     X_ref = ref["X"]
@@ -66,7 +71,7 @@ def main():
     del X_ref
     
     k=80
-    tref.run_trials(
+    tref.run_trials_ang(
         model, 
         tokenizer, 
         formatted_harmful_prompts, 
@@ -82,11 +87,12 @@ def main():
         output_filename
     )
 
+    # del X_contr
     print("__________________________________________\nFinished Initial Sweep\n__________________________________________")
 
     import asr as asr
 
-    it_format = asr.qwen_it_format
+    it_format = asr.llama_it_format
 
     data_file_path = asr.PATH + output_filename + ".txt"
     with open(data_file_path, 'r') as file:
@@ -94,7 +100,7 @@ def main():
 
     print("UNSTEERED")
     inps = asr.get_classifier_inputs(it_format, data[0]["unsteered output"])
-    u_score = asr.harmbench_judge(inps, batch_size=4)
+    u_score = asr.harmbench_judge(inps,batch_size=4)
     data[0]["unsteered ASR"] = u_score
 
     print("STEERED")
@@ -105,7 +111,7 @@ def main():
         l = d["lambda"]
         print(f"lambda: {l}, q: {q}, r: {r}, qf: {qf}")
         inps = asr.get_classifier_inputs(it_format, d["steered output"])
-        s_score = asr.harmbench_judge(inps, batch_size=4)
+        s_score = asr.harmbench_judge(inps,batch_size=4)
 
         d["Steered ASR"] = s_score
 

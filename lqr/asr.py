@@ -67,6 +67,15 @@ qwen_it_format = {
                   "begin": "system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.\nuser\n",
                   "end": "\nassistant\n" 
                   }
+llama_it_format = {
+                  "begin": "system\n\nCutting Knowledge Date: December 2023\nToday Date: 26 Jul 2024\n\nuser\n\n",
+                  "end": "assistant\n" 
+                  }
+
+gemma_it_format = {
+                  "begin": "user\n",
+                  "end": "\nmodel\n" 
+                  }
 
 gemma_it_format = {
                   "begin": "user\n",
@@ -130,7 +139,7 @@ def harmbench_judge(inputs, batch_size=10):
 def main():
     it_format = gemma_it_format
 
-    filename = "test_angular"
+    filename = "test_angular_all_tokens"
     data_file_path = PATH + filename + ".txt"
     with open(data_file_path, 'r') as file:
         data = json.load(file)

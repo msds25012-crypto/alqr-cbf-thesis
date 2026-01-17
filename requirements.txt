@@ -10,3 +10,6 @@ numpy
 tokenizers
 tqdm
 sentencepiece
+protobuf
+scikit-learn
+evaluate
