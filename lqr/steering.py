@@ -401,7 +401,7 @@ class LQRSteering:
         output_str = self.tokenizer.decode(output.sequences[0], skip_special_tokens=True)
         return output_str
 
-    def track_setpoint(self, prompt, max_new_tokens, lmbda=1, do_sample=False, temp=0.7):
+    def track_setpoint(self, prompt, max_new_tokens, lmbda=1, do_sample=False, temp=1):
         self.mode = Mode.SETPOINT
         self.setpoint_type = "linear"
         self.SIGNAL_COLLECT = True
