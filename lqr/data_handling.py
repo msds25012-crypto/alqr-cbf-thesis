@@ -1,4 +1,5 @@
 import torch as th
+import numpy as np
 import transformers
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 import lqr_utils_seq as lqr
@@ -279,6 +280,118 @@ class ContrastiveBuilder:
         del self.X
         self.X = None
 
+    def collect_activations(self, prompts, num_samples, filename=None, num_tokens=1, batch_size=50):
+        self.mode = Mode.COLLECTING
+
+        acts = th.zeros((num_samples, self.T+1, self.n))
+
+        samples = random.sample(prompts, num_samples)
+        for i in range(0,len(samples), batch_size):
+            sample = samples[i:i+batch_size]
+            inputs = self.tokenizer(
+                sample, 
+                return_tensors="pt", 
+                padding=True,
+                truncation=True,
+            ).to(self.device)
+            # print(f"inputs: {inputs}")
+            input_ids = inputs["input_ids"]
+            B,L = input_ids.shape
+            # print(f"B,L: {B,L}")
+            attention_mask = inputs["attention_mask"].float()
+            embedding_layer = self.model.get_input_embeddings()
+            hidden_states = embedding_layer(input_ids)
+            self.X = th.zeros(self.T+1, B, L, hidden_states.size(-1), device=self.device)
+
+            with self:
+                self.model.generate(input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        max_new_tokens=num_tokens,
+                        return_dict_in_generate=True,
+                        do_sample=False,
+                        use_cache=False,
+                        pad_token_id=self.tokenizer.eos_token_id,
+                        )
+
+            acts[i:i+batch_size] = th.transpose(self.X[:,:,-1,:],0,1).detach().cpu()
+            # X_mean = th.mean(self.X[:,:,-1,:], dim = 1)
+        return acts
+
+        # tensor_dict = {
+        #     "X": X_mean,
+        # } 
+
+        # with open(PICKLE_JAR + filename + ".pkl", "wb") as f:
+        #     pickle.dump(tensor_dict, f)
+        
+        # del self.X
+        # self.X = None
+
+    def collect_acts_and_jacs(self, prompts, num_samples, filename, num_tokens=1, max_ctx=512): # 24 works for llama 8-9b
+        self.mode = Mode.COLLECTING
+        jacs = th.zeros((num_samples, self.T, self.n, self.n,))
+        acts = th.zeros((num_samples, self.T+1, self.n))
+
+        sample = random.sample(prompts, num_samples)
+        iter = 1
+        for i, prompt in enumerate(sample):
+            print(f"iter: {iter}")
+            iter += 1
+            inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=max_ctx).to(self.device)
+
+            # print(f"inputs: {inputs}")
+            input_ids = inputs["input_ids"]
+            attention_mask = inputs["attention_mask"].float()
+            embedding_layer = self.model.get_input_embeddings()
+            hidden_states = embedding_layer(input_ids)
+            self.X = th.zeros_like(hidden_states).repeat(self.T+1, 1, 1).to(self.device)
+
+            with th.no_grad():
+                with self:
+                    self.model.generate(input_ids=input_ids,
+                            attention_mask=attention_mask,
+                            max_new_tokens=num_tokens,
+                            return_dict_in_generate=True,
+                            do_sample=False,
+                            use_cache=False,
+                            pad_token_id=self.tokenizer.eos_token_id,
+                            )
+            
+            # self.X_sum = self.X_sum + self.X[:,-1,:]
+
+
+            # and A_iter > 0:
+            batch_size, seq_len = input_ids.shape
+            position_ids = th.arange(seq_len, dtype=th.long, device=self.device)
+            position_ids = position_ids.unsqueeze(0).expand(batch_size, seq_len).to(self.device)
+
+            position_embeddings = self.model.model.rotary_emb(hidden_states, position_ids)
+
+            wrapped_tfs_temp = [partial(lqr.new_llama_block_wrapper, tf, attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
+            tfs_with_control_temp = [partial(lqr.transformerBlockControl, tf) for tf in wrapped_tfs_temp]
+            # A, _ = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X)
+            A = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X)
+            jacs[i] = A.detach().cpu()
+            print(self.X.shape)
+            # acts[i] = th.transpose(self.X[:,-1,:],0,1).detach().cpu()
+            acts[i] = self.X[:,-1,:].detach().cpu()
+                # A_iter -= 1
+            del A
+            A = None
+            del self.X
+            self.X = None
+
+        tensor_dict = {
+            "acts": acts,
+            "jacs": jacs,
+        } 
+
+        with open(PICKLE_JAR + filename + ".pkl", "wb") as f:
+            pickle.dump(tensor_dict, f)
+        return acts,jacs
+
+        # del self.A_sum
+        # self.A_sum = None
 
 
     def collect_jacobians(self, prompts, num_samples, filename, num_tokens=1, max_ctx=512): # 24 works for llama 8-9b
