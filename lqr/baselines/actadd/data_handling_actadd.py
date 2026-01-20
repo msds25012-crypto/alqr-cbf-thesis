@@ -51,19 +51,18 @@ class ContrastiveBuilder:
         self.hooks = []
         # self.mode = Mode.COLLECTING
 
-    def hook_collector(self, layer_idx, module, input):
-        self.X[layer_idx] = input[0]
+    def hook_collector(self, layer_idx, module, inputs):
+        self.X[layer_idx] = inputs[0]
         # if layer_idx == self.T-1:
         #     self.X[self.T] = output[0]
         return None
     
     def register_hooks(self):
-        """Register the hooks."""
 
         for layer_idx, layer in enumerate(self.model.model.layers):
             def hook_wrapper(layer_idx):
-                def hook(module, input):
-                    return self.hook_collector(layer_idx, module, input)
+                def hook(module, inputs):
+                    return self.hook_collector(layer_idx, module, inputs)
 
                 return hook
 
@@ -109,15 +108,23 @@ class ContrastiveBuilder:
             hidden_states = embedding_layer(input_ids)
             self.X = th.zeros(self.T, B, L, hidden_states.size(-1), device=self.device)
 
+            # with self:
+            #     self.model.generate(input_ids=input_ids,
+            #             attention_mask=attention_mask,
+            #             max_new_tokens=num_tokens,
+            #             return_dict_in_generate=True,
+            #             do_sample=False,
+            #             # use_cache=False,
+            #             pad_token_id=self.tokenizer.eos_token_id,
+            #             )
             with self:
-                self.model.generate(input_ids=input_ids,
-                        attention_mask=attention_mask,
-                        max_new_tokens=num_tokens,
-                        return_dict_in_generate=True,
-                        do_sample=False,
-                        # use_cache=False,
-                        pad_token_id=self.tokenizer.eos_token_id,
-                        )
+                _ = self.model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    use_cache=False,
+                    return_dict=True,
+                )
+
 
             seq_len = self.X.size(2)
             mask = attention_mask
