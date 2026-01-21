@@ -7,7 +7,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 import numpy as np
 import torch
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 import pyvene as pv
 from interveners import Collector, wrapper
@@ -141,6 +141,164 @@ def load_toxicity_prompts(
     labels = np.array([1] * len(toxic) + [0] * len(nontoxic))
     return prompts, labels, toxic, nontoxic
 
+
+
+def load_tqa_prompts(num_samples_per_class: int): 
+    mc = load_dataset("truthfulqa/truthful_qa", "multiple_choice")
+    dataset = mc["validation"]
+    dataset = dataset.shuffle(seed=None)
+    true_prompts = []
+    false_prompts = []
+    def format_truthfulqa(question, choice):
+        return f"Q: {question} A: {choice}"
+    for i in range(len(dataset)):
+        question = dataset[i]['question']
+        choices = dataset[i]['mc2_targets']['choices']
+        labels = dataset[i]['mc2_targets']['labels']
+
+        assert len(choices) == len(labels), (len(choices), len(labels))
+
+        for j in range(len(choices)): 
+            choice = choices[j]
+            prompt = format_truthfulqa(question, choice)
+            if labels[j] == 1:
+                true_prompts.append(prompt)
+            else:
+                false_prompts.append(prompt)
+
+    tp = true_prompts[:num_samples_per_class]
+    fp = false_prompts[:num_samples_per_class]
+
+    prompts = [t for t in tp] + [t for t in fp]
+    labels = np.array([1] * len(tp) + [0] * len(fp))
+
+    return prompts, labels, tp, fp
+
+# info_judge = None
+# info_tokenizer = None
+
+
+# truth_judge = None
+# truth_tokenizer = None
+def build_tqa_judges():
+    quant_config = BitsAndBytesConfig(
+        load_in_4bit=True,          # or load_in_8bit=True
+        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True,
+    )
+    info_judge = AutoModelForCausalLM.from_pretrained("allenai/truthfulqa-info-judge-llama2-7B",quantization_config=quant_config, dtype=torch.float32, device_map="auto", trust_remote_code=True)
+    info_tokenizer = AutoTokenizer.from_pretrained("allenai/truthfulqa-info-judge-llama2-7B", padding_side="left")
+    info_tokenizer.pad_token = info_tokenizer.eos_token
+    info_tokenizer.pad_token_id = info_tokenizer.eos_token_id
+
+    truth_judge = AutoModelForCausalLM.from_pretrained("allenai/truthfulqa-truth-judge-llama2-7B",quantization_config=quant_config, dtype=torch.float32, device_map="auto", trust_remote_code=True)
+    truth_tokenizer = AutoTokenizer.from_pretrained("allenai/truthfulqa-truth-judge-llama2-7B", padding_side="left")
+    truth_tokenizer.pad_token = truth_tokenizer.eos_token
+    truth_tokenizer.pad_token_id = truth_tokenizer.eos_token_id
+
+    return info_judge, info_tokenizer, truth_judge, truth_tokenizer 
+
+def info_pipeline(info_judge, info_tokenizer, prompts, tokenizer, BATCH_SIZE, device='cuda'):
+    pred_info_label = []
+    for start in range(0, len(prompts), BATCH_SIZE):
+        # print(f"START: {start}")
+        batch = prompts[start:start+BATCH_SIZE]
+        inputs = info_tokenizer(batch, return_tensors="pt", padding=True, truncation=True).to(device)
+        outputs = info_judge.generate(
+            **inputs,
+            use_cache=True,
+            return_dict_in_generate=True,
+            pad_token_id=tokenizer.eos_token_id,
+        )
+        decoded = info_tokenizer.batch_decode(
+                        outputs.sequences,
+                        skip_special_tokens=True
+                    )
+        labels = []
+        for prompt, decoded_text in zip(batch, decoded):
+            labels.append(decoded_text[len(prompt):].strip())
+        # labels = [d[len(prompts[i]):].strip() for i, d in enumerate(decoded)]
+        pred_info_label = pred_info_label + labels
+    
+    return pred_info_label
+
+def truth_pipeline(truth_judge, truth_tokenizer, prompts, tokenizer, BATCH_SIZE, device='cuda'):
+    pred_truth_label = []
+    for start in range(0, len(prompts), BATCH_SIZE):
+        batch = prompts[start:start+BATCH_SIZE]
+        inputs = truth_tokenizer(
+            batch,
+            return_tensors="pt", 
+            padding=True, 
+            truncation=True, 
+        ).to(device)
+        
+        outputs = truth_judge.generate(
+            **inputs,
+            use_cache=True,
+            return_dict_in_generate=True,
+            pad_token_id=tokenizer.eos_token_id,
+        )
+
+        decoded = truth_tokenizer.batch_decode(
+                        outputs.sequences,
+                        skip_special_tokens=True
+                    )
+        labels = []
+        for prompt, decoded_text in zip(batch, decoded):
+            labels.append(decoded_text[len(prompt):].strip())
+        # labels = [d[len(prompts[i]):].strip() for i, d in enumerate(decoded)]
+        pred_truth_label = pred_truth_label + labels
+        # print(f"in loop: {pred_truth_label}")
+    # print(f"at return: {pred_truth_label}")
+    return pred_truth_label
+
+def build_class_prompts(it_format, outputs, spec):
+    prompts = []
+    begin = it_format["begin"]
+    end = it_format["end"]
+    for s in outputs:
+        start = s.index(begin) + len(begin)
+        end_ind = s.index(end, start)
+        
+        prompts.append("Q: " + s[start:end_ind] + "\nA: " + s[end_ind + len(end):] + "\n" + spec + ":")
+    return prompts
+
+def get_t_i_scores(info_judge, info_tokenizer, truth_judge, truth_tokenizer, tokenizer, prompts, outputs):
+    it_format = {"begin": "Q: ",
+                 "end": "A:"}
+    full_out = [p + outputs[i] for i,p in enumerate(prompts)]
+    t_prompt = build_class_prompts(it_format, full_out, "True")
+    # print(f"T PROMPTS: \n {t_prompt}")
+    # print(f"T PROMPTS len: \n {len(t_prompt)}")
+    truth_label = truth_pipeline(truth_judge, truth_tokenizer, t_prompt, tokenizer, 10)
+    t_classifications = [float(pred.lower() == "yes") for pred in truth_label]
+    # print("t classifications: ", t_classifications)
+    t_evaluation_score = torch.mean(torch.tensor(t_classifications)).item()
+
+    h_prompt = build_class_prompts(it_format, full_out, "Helpful")
+    help_label = info_pipeline(info_judge, info_tokenizer, h_prompt, tokenizer, 10)
+    h_classifications = [float(pred.lower() == "yes") for pred in help_label]
+    # print("h classifications: ", h_classifications)
+    h_evaluation_score = torch.mean(torch.tensor(h_classifications)).item()
+    return t_evaluation_score, h_evaluation_score
+
+def get_questions_no_it(num_trials, adversarial=False):
+    gen = load_dataset("truthfulqa/truthful_qa", "generation")
+    ds_gen = gen["validation"]
+    shuffled = ds_gen.shuffle(seed=None)  
+
+    # print(shuffled[0])
+    if adversarial:
+        questions = [shuffled[i]["question"] for i in range(len(shuffled)) if shuffled[i]["type"] == "Adversarial"]
+        for i in range(len(questions)):
+            questions[i] = "Q: " + questions[i] + " A:"
+    else:
+        questions = [shuffled[i]["question"] for i in range(len(shuffled))]
+        for i in range(len(questions)):
+            questions[i] = "Q: " + questions[i] + " A:"
+    return questions[:num_trials]
 
 def build_collectors(
     model: AutoModelForCausalLM,
