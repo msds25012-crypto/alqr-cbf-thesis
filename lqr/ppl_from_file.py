@@ -6,6 +6,8 @@ import tox_data_script as utils
 import numpy as np
 import typing as t
 import yaml
+from pathlib import Path
+import pandas as pd
 
 with open('config/config.yaml', 'r') as f:
     config_data = yaml.safe_load(f)
@@ -167,10 +169,10 @@ def measure_perplexity(
     return ppl
 
 def get_ppl_from_file(filename, path=None, BATCH_SZ=10):
-    if path is not None:
-        PATH=path 
-    else: 
-        PATH=PATH
+    # if path is not None:
+    #     PATH=path 
+    # else: 
+    #     PATH=PATH
         
     try:
         with open(PATH + filename + ".txt", 'r') as file:
@@ -238,13 +240,103 @@ def get_ppl_from_file(filename, path=None, BATCH_SZ=10):
         json.dump(data, file, indent=4)
     return True
 
+
+def read_csv(data_path: Path) -> pd.DataFrame:
+    # Trying , and ; as delimiters.
+    try:
+        df = pd.read_csv(data_path, index_col=0)
+    except:
+        try:
+            df = pd.read_csv(data_path, delimiter=";", index_col=0)
+        except Exception as exc:
+            raise RuntimeError(exc)
+    # Hack for user study csvs, remove NaN in the "id" column (there are explanation cells).
+    # if id in df.columns:
+    #     df = df[~df.id.isna()]
+    return df
+
+def get_ppl_from_csv(filepath, outfilename, path="./concepts/", BATCH_SZ=10):
+    df = read_csv(filepath)
+
+    u_ppls = []
+    s_ppls = []
+    model_name = "mistralai/Mistral-7B-v0.1"
+    model, tokenizer = utils.load_model(model_name, quant=True)
+
+    for l in [1,2,3]:
+        print(f"lambda: {l}")
+        unsteered_responses = df.loc[df["lambda"] == l, "unsteered"].tolist()
+        steered_responses = df.loc[df["lambda"] == l, "steered"].tolist()
+
+    
+        prompt = "Once upon a time"
+        unsteered_gens = []
+        steered_gens = []
+
+        for i, s in enumerate(unsteered_responses):
+            unsteered_gens.append(s[len(prompt):])
+
+        for i, s in enumerate(steered_responses):
+            steered_gens.append(s[len(prompt):])
+
+        prompts = [prompt]*len(unsteered_gens)
+
+        u_ppl = measure_perplexity(
+            continuations=unsteered_gens,
+            prompts=prompts,
+            model=model,
+            tokenizer=tokenizer,
+            batch_size=BATCH_SZ
+        )
+
+        s_ppl = measure_perplexity(
+            continuations=steered_gens,
+            prompts=prompts,
+            model=model,
+            tokenizer=tokenizer,
+            batch_size=BATCH_SZ
+        )
+        # unoutput = ppl.compute(predictions=sweep["unsteered output"], model_id='gpt2-xl')
+        # stoutput = ppl.compute(predictions=sweep["steered output"], model_id='gpt2-xl')
+
+        # ppl_unsteered = unoutput['mean_perplexity']
+        # ppl_steered = stoutput['mean_perplexity']
+        print(f"lambda: {l}")
+        print(f"unsteered ppl: {np.mean(u_ppl).item()}")
+        print(f"steered ppl: {np.mean(s_ppl).item()}")
+        u_ppls.extend(u_ppl.tolist())
+        s_ppls.extend(s_ppl.tolist())
+
+    results_df = pd.DataFrame(
+        {
+            "unsteered ppl": u_ppls,
+            "steered ppl": s_ppls,
+        }
+    )
+    dfs_out = (
+        [
+            df,
+        ]
+    )
+    results_final = pd.concat(
+        dfs_out + [results_df],
+        axis=1,
+    )
+    output_path = "./concepts/"
+    if output_path is not None:
+        filename = Path(output_path) / (outfilename + "ppl_eval.csv")
+        results_final.to_csv(filename)
+        print(f"Saved results in {filename}")
+
+
 def main():
-    filename = 'gemma-2-2b_tox_eval'
+    filename = 'concepts/0_vague_shot_eval.csv'
     # with open(PATH + filename + ".txt", 'r') as file:
     #     data = json.load(file)
     
 
-    get_ppl_from_file(filename)
+    get_ppl_from_csv(filename, "vague_")
+    # get_ppl_from_file(filename)
 
 if __name__ == "__main__":
     main()
