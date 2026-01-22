@@ -68,6 +68,8 @@ class LQRSteering:
         self.X = None # to allocate at runtime
         self.U = th.zeros((self.T, self.n), device=self.device)
 
+        self.X_cl = None
+
         self.betas = None
         self.E_unit = None
         self.setpoint_type = "linear"
@@ -76,7 +78,7 @@ class LQRSteering:
 
         self.hooks = []
         self.mode = None
-        self.ALL_TOKENS = True
+        self.ALL_TOKENS = False
         
 
         self.setpoint_signals = []
@@ -162,12 +164,23 @@ class LQRSteering:
     def hook_tracking(self, layer_idx, module, input, output):
         x_t = input[0][0,-1,:]
 
+        if layer_idx == 0:
+            self.X_cl[self.iter][layer_idx] = x_t
+
         diff = x_t - self.X[self.iter][layer_idx,-1,:]
         u_t = -self.K[layer_idx]@(diff)
         # u_t = -(diff)
         self.U[layer_idx] = u_t
 
-        output[0][...,-1,:] = output[0][...,-1,:] + u_t # new
+        if isinstance(output,tuple):
+            output[0][...,-1,:] = output[0][...,-1,:] + u_t
+            if layer_idx == self.T-1:
+                self.X_cl[self.iter][layer_idx+1] = output[0][...,-1,:]
+
+        else: 
+            output[...,-1,:] = output[...,-1,:] + u_t
+            if layer_idx == self.T-1:
+                self.X_cl[self.iter][layer_idx+1] = output[...,-1,:]
 
         if (layer_idx == self.T-1):
             # self.X[self.iter][self.T] = output[0][...,-1,:] + u_t
@@ -324,13 +337,14 @@ class LQRSteering:
                 x = x + u_t
                 # print("here")
                 
-            v = self.E_unit[layer_idx+1]
+            # v = self.E_unit[layer_idx+1]
+            v = self.E_unit[0]
             # v = self.E_unit[-2]
             raw_signal = th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
             nm = th.norm(self.E[layer_idx+1])
             # print(nm)
-            # signal = raw_signal / nm
-            signal = raw_signal
+            signal = raw_signal / nm
+            # signal = raw_signal
             self.setpoint_signals.append(th.mean(signal).item())
         return output
 
@@ -537,7 +551,7 @@ class LQRSteering:
             position_embeddings = self.model.model.rotary_emb(hidden_states, position_ids)
             wrapped_tfs_temp = [partial(lqr.new_llama_block_wrapper, tf, nom_attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
             tfs_with_control_temp = [partial(lqr.transformerBlockControl, tf) for tf in wrapped_tfs_temp]
-            self.A, _ = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X[0]) # linearizing about first subtrajectory
+            self.A = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X[0]) # linearizing about first subtrajectory
 
         lin_time = time.perf_counter()
         print(f"Linearize time: {lin_time - end_nom_time}")
@@ -546,6 +560,11 @@ class LQRSteering:
         self.K = lqr.time_varying_lqr(self.A, self.B, self.Q, self.R, self.Qf)
 
         self.mode = Mode.TRACKING
+        self.X_cl = [th.zeros_like(hidden_states).repeat(self.T+1, 1, 1).to(self.device)]
+        
+        sublist = [th.zeros_like(hidden_states[...,-1,:]).repeat(self.T+1, 1, 1).to(self.device) for i in range(k-1)]
+        self.X_cl = self.X_cl + sublist
+
         self.iter = 0
 
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
