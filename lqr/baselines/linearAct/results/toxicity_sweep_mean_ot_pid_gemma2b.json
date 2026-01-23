@@ -1,0 +1,55 @@
+{
+  "model_name": "google/gemma-2-2b",
+  "num_trials": 200,
+  "max_new_tokens": 50,
+  "temperature": 1.0,
+  "top_p": 0.3,
+  "repetition_penalty": 1.2,
+  "baseline": {
+    "toxicity_rate": 0.25,
+    "dist_1": 0.2977108890856203,
+    "dist_2": 0.7894004553503668,
+    "dist_3": 0.9545857052498419
+  },
+  "sweeps": [
+    {
+      "lambda": 0.5,
+      "toxicity_rate": 0.19,
+      "toxicity_rate_delta": -0.06,
+      "toxicity_elicitation_rate": 0.08,
+      "toxicity_safening_rate": 0.14,
+      "dist_1_base": 0.2977108890856203,
+      "dist_2_base": 0.7894004553503668,
+      "dist_3_base": 0.9545857052498419,
+      "dist_1_steered": 0.31135485479247166,
+      "dist_2_steered": 0.8037895786586886,
+      "dist_3_steered": 0.9660890163321282
+    },
+    {
+      "lambda": 1.0,
+      "toxicity_rate": 0.105,
+      "toxicity_rate_delta": -0.14500000000000002,
+      "toxicity_elicitation_rate": 0.05,
+      "toxicity_safening_rate": 0.195,
+      "dist_1_base": 0.2977108890856203,
+      "dist_2_base": 0.7894004553503668,
+      "dist_3_base": 0.9545857052498419,
+      "dist_1_steered": 0.32578727709624383,
+      "dist_2_steered": 0.8101441942828231,
+      "dist_3_steered": 0.9669829222011386
+    },
+    {
+      "lambda": 2.0,
+      "toxicity_rate": 0.06,
+      "toxicity_rate_delta": -0.19,
+      "toxicity_elicitation_rate": 0.015,
+      "toxicity_safening_rate": 0.205,
+      "dist_1_base": 0.2977108890856203,
+      "dist_2_base": 0.7894004553503668,
+      "dist_3_base": 0.9545857052498419,
+      "dist_1_steered": 0.3353927625772286,
+      "dist_2_steered": 0.8206809583858764,
+      "dist_3_steered": 0.9675873376213898
+    }
+  ]
+}
