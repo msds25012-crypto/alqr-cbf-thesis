@@ -13,6 +13,8 @@ import pyvene as pv
 from interveners import Collector, wrapper
 from utils import get_llama_activations_pyvene, resolve_attn_out_proj_component
 
+import csv
+
 MODEL_CONFIGS = {
     "llama1b": {
         "hf_name": "meta-llama/Llama-3.2-1B",
@@ -169,10 +171,10 @@ def load_tqa_prompts(num_samples_per_class: int):
     tp = true_prompts[:num_samples_per_class]
     fp = false_prompts[:num_samples_per_class]
 
-    prompts = [t for t in tp] + [t for t in fp]
+    prompts = [t for t in fp] + [t for t in tp]
     labels = np.array([1] * len(tp) + [0] * len(fp))
 
-    return prompts, labels, tp, fp
+    return prompts, labels, fp, tp
 
 # info_judge = None
 # info_tokenizer = None
@@ -299,6 +301,54 @@ def get_questions_no_it(num_trials, adversarial=False):
         for i in range(len(questions)):
             questions[i] = "Q: " + questions[i] + " A:"
     return questions[:num_trials]
+
+def load_con_prompts(num_samples_per_class: int, target: str): 
+    sentences = []  # Target concept sentences
+    others = {}     # Other concepts: {concept_name: [sentences]}
+
+    # Read CSV and separate sentences
+    csv_path = "../concepts/filtered_sentences.csv"
+    with open(csv_path, mode='r', newline='', encoding='utf-8') as file:
+        reader = csv.DictReader(file)
+        for row in reader:
+            concept_name = row["concept"]
+            sentence = row["sentence"]
+
+            if concept_name == f"{target}.NOUN":
+                sentences.append(sentence)
+            else:
+                # Initialize list if not exists
+                if concept_name not in others:
+                    others[concept_name] = []
+                others[concept_name].append(sentence)
+
+    # Find the minimum length among other concepts
+    min_len = min(len(sents) for sents in others.values())
+
+    # Build the alternating list
+    other_sentences = []
+    for i in range(min_len):
+        for concept in others:
+            other_sentences.append(others[concept][i])
+            
+    tp = sentences[:num_samples_per_class]
+    if len(tp) == 0:
+        raise ValueError("No target prompts -- perhaps incorrect target specified?")
+
+    fp = other_sentences[:num_samples_per_class]
+
+    prompts = [t for t in fp] + [t for t in tp]
+    labels = np.array([1] * len(tp) + [0] * len(fp))
+
+
+    return prompts, labels, fp, tp
+
+def get_con_eval_prompts(num_trials: int):
+    return ['Once upon a time' for i in range(num_trials)]
+
+###########################################
+################ ITI stuff ################
+###########################################
 
 def build_collectors(
     model: AutoModelForCausalLM,

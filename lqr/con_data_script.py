@@ -94,12 +94,12 @@ def get_target_and_other_sentences(csv_path, target):
     return sentences, other_sentences
 
 def main():
-    model_name = "google/gemma-2-2b"
+    # model_name = "google/gemma-2-2b"
     # model_name = "meta-llama/Meta-Llama-3-8B"
     # model_name = "google/gemma-2-9b"
     # model_name = "meta-llama/Llama-3.1-8B-Instruct"
     # model_name = "meta-llama/Llama-3.2-1B"
-    # model_name = "Qwen/Qwen2.5-3B"
+    model_name = "Qwen/Qwen2.5-3B"
 
     concepts = [
         "football",
@@ -109,7 +109,7 @@ def main():
         "balloon"
     ]
 
-    sen, other = get_target_and_other_sentences('concepts/filtered_sentences.csv', "dog")
+    sen, other = get_target_and_other_sentences('concepts/filtered_sentences.csv', "balloon")
 
     for i in range(10):
         print(sen[i])
@@ -119,17 +119,17 @@ def main():
 
     dataguy = ContrastiveBuilder(model, tokenizer)
     
-    # filename = "gemma-2-2b-dog"
-    # dataguy.collect_data_batch(sen, 200, filename)
-    # print("done with dtox")
+    filename = "Qwen2.5-3B-balloon"
+    dataguy.collect_data_batch(sen, 200, filename)
+    print("done with dtox")
 
-    filename = "gemma-2-2b-nondog"
+    filename = "Qwen2.5-3B-nonballoon"
     dataguy.collect_data_batch(other, 200, filename)
-    print("done with nondog")
+    print("done with ", filename)
 
-    # filename = "gemma-2-2b-dog_jac"
-    # dataguy.collect_jacobians(sen, 50, filename)
-    # print("done with jac")
+    filename = "Qwen2.5-3B-balloon,jac"
+    dataguy.collect_jacobians(sen, 50, filename)
+    print("done with jac")
 
 if __name__ == "__main__":
     print(f"device: {device}")
