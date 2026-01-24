@@ -206,7 +206,30 @@ class ITISteering:
                 do_sample=do_sample,
                 temperature=temp,
                 top_p=top_p_val,
-                repetition_penalty=float(repetition_penalty),
+                repetition_penalty=float(repetition_penalty) if not repetition_penalty == 0 else None,
+            )
+        gen_ids = output[0][input_ids.shape[-1] :]
+        return self.tokenizer.decode(gen_ids, skip_special_tokens=True)
+
+    def generate_base_MMLU(
+        self,
+        prompt: str,
+        *,
+        max_new_tokens: int = 50,
+        do_sample: bool = False,
+        temperature: float = 1.0,
+        top_p: float = 1.0,
+    ) -> str:
+        input_ids = encode_prompt(self.tokenizer, prompt).to(self.device)
+        with torch.no_grad():
+            temp = max(float(temperature), 1e-6) if do_sample else None
+            top_p_val = float(top_p) if do_sample else None
+            output = self.model.generate(
+                input_ids,
+                max_new_tokens=max_new_tokens,
+                do_sample=do_sample,
+                temperature=temp,
+                top_p=top_p_val,
             )
         gen_ids = output[0][input_ids.shape[-1] :]
         return self.tokenizer.decode(gen_ids, skip_special_tokens=True)
@@ -234,6 +257,32 @@ class ITISteering:
                 temperature=temp,
                 top_p=top_p_val,
                 repetition_penalty=float(repetition_penalty),
+            )
+        if isinstance(out, tuple):
+            out = out[1]
+        gen_ids = out[0][input_ids.shape[-1] :]
+        return self.tokenizer.decode(gen_ids, skip_special_tokens=True)
+
+    def generate_steered_MMLU(
+        self,
+        steered_model: pv.IntervenableModel,
+        prompt: str,
+        *,
+        max_new_tokens: int = 50,
+        do_sample: bool = False,
+        temperature: float = 1.0,
+        top_p: float = 1.0,
+    ) -> str:
+        input_ids = encode_prompt(self.tokenizer, prompt).to(self.device)
+        with torch.no_grad():
+            temp = max(float(temperature), 1e-6) if do_sample else None
+            top_p_val = float(top_p) if do_sample else None
+            out = steered_model.generate(
+                {"input_ids": input_ids},
+                max_new_tokens=max_new_tokens,
+                do_sample=do_sample,
+                temperature=temp,
+                top_p=top_p_val,
             )
         if isinstance(out, tuple):
             out = out[1]

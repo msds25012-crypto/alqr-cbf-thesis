@@ -7,7 +7,7 @@ import torch
 from datasets import load_dataset
 from transformers import pipeline
 
-from data_handling_iti import MODEL_CONFIGS, load_model_and_tokenizer, resolve_model_name, set_seed, build_tqa_judges, get_t_i_scores, get_questions_no_it
+from data_handling_iti import MODEL_CONFIGS, load_model_and_tokenizer, resolve_model_name, set_seed
 from ITIsteering import ITISteering
 
 
@@ -65,18 +65,112 @@ def generate_batch(prompts: Sequence[str], generate_fn, label: str, print_every:
     return outs
 
 
+LETTER_MAP = {0: "A", 1: "B", 2: "C", 3: "D"}
+
+# List of all MMLU subjects (configs) in cais/mmlu
+# SUBJECTS = [
+    # 'abstract_algebra']
+SUBJECTS = [
+    'abstract_algebra', 'anatomy', 'astronomy', 'business_ethics',
+    'clinical_knowledge', 'college_biology', 'college_chemistry', 'college_computer_science',
+    'college_mathematics', 'college_medicine', 'college_physics', 'computer_security',
+    'conceptual_physics', 'econometrics', 'electrical_engineering', 'elementary_mathematics',
+    'formal_logic', 'global_facts', 'high_school_biology', 'high_school_chemistry',
+    'high_school_computer_science', 'high_school_european_history', 'high_school_geography',
+    'high_school_government_and_politics', 'high_school_macroeconomics', 'high_school_mathematics',
+    'high_school_microeconomics', 'high_school_physics', 'high_school_psychology',
+    'high_school_statistics', 'high_school_us_history', 'high_school_world_history',
+    'human_aging', 'human_sexuality', 'international_law', 'jurisprudence', 'logical_fallacies',
+    'machine_learning', 'management', 'marketing', 'medical_genetics', 'miscellaneous',
+    'moral_disputes', 'moral_scenarios', 'nutrition', 'philosophy', 'prehistory',
+    'professional_accounting', 'professional_law', 'professional_medicine', 'professional_psychology',
+    'public_relations', 'security_studies', 'sociology', 'us_foreign_policy', 'virology', 'world_religions'
+]
+
+
+
+def format_example(example):
+    answer_letter = LETTER_MAP[example["answer"]]
+    choices = "\n".join(
+        f"{letter}. {text}" for letter, text in zip(["A", "B", "C", "D"], example["choices"])
+    )
+    return f"Question: {example['question']}\n{choices}\nAnswer: {answer_letter}\n\n"
+
+
+def format_query(example, instruct=False):
+    choices = "\n".join(
+        f"{letter}. {text}" for letter, text in zip(["A", "B", "C", "D"], example["choices"])
+    )
+    if not instruct:
+        return f"Question: {example['question']}\n{choices}\nAnswer:"
+    else:
+        return f"Answer the multiple-choice question: {example['question']}\n{choices}\n Answer with only a single letter."
+
+def build_5shot_prompt(dev_set, test_example, n_shots=5):
+    exemplars = random.sample(list(dev_set), n_shots)
+    prompt = ""
+    for ex in exemplars:
+        prompt += format_example(ex)
+    prompt += format_query(test_example)
+    # Store the correct answer letter for the test example
+    correct_answer = LETTER_MAP[test_example["answer"]]
+    return prompt, correct_answer
+
+def get_mmlu_prompts(num_trials: int, N_SHOTS=5):
+    subject_datasets = {
+            sub: load_dataset("cais/mmlu", sub)
+            for sub in SUBJECTS
+        }
+   
+    prompts_with_answers = []
+    samples = []
+    for i in range(num_trials):
+        subject = random.choice(SUBJECTS)
+        ds = subject_datasets[subject]
+        dev, test = ds["dev"], ds["test"]
+
+        if len(dev) < N_SHOTS or len(test) == 0:
+            continue
+
+        test_example = random.choice(test)
+        prompt, correct_answer = build_5shot_prompt(dev, test_example, N_SHOTS)
+
+        # print(f"prompt: {prompt}")
+
+        prompts_with_answers.append({
+            "subject": subject,
+            "prompt": prompt,
+            "answer": correct_answer
+        })
+
+        samples.append(prompt)
+    return samples, prompts_with_answers
+
+def score_responses(outputs, prompts_with_answers):
+    results = []
+    # print(f"outs: {outputs}")
+    # print(f"prompts with answers: {prompts_with_answers}")
+    for item, model_output in zip(prompts_with_answers, outputs):
+        model_choice = model_output.strip()[-1].upper()
+        correct_choice = item["answer"]
+        # print(f"model choice: {model_choice}")
+        # print(f"correct choice: {correct_choice}")
+        results.append(model_choice == correct_choice)
+    accuracy = sum(results) / len(results)
+    return accuracy
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="")
     parser.add_argument("--model", choices=MODEL_CONFIGS.keys(), default="gemma2b")
     parser.add_argument("--artifact", type=str)
-    parser.add_argument("--num-trials", type=int, default=500)
+    parser.add_argument("--num-trials", type=int, default=1000)
     parser.add_argument("--max-length", type=int, default=128)
-    parser.add_argument("--max-new-tokens", type=int, default=50)
-    parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--max-new-tokens", type=int, default=1)
+    parser.add_argument("--temperature", type=float, default=0.1)
     parser.add_argument("--top-p", type=float, default=0.3)
-    parser.add_argument("--repetition-penalty", type=float, default=1.2)
-    parser.add_argument("--top-k", type=str, default="16,32,64")
-    parser.add_argument("--alpha", type=str, default="5,10,15")
+    parser.add_argument("--repetition-penalty", type=float, default=0.0)
+    parser.add_argument("--top-k", type=str, default="32")
+    parser.add_argument("--alpha", type=str, default="10")
     parser.add_argument("--output", type=str, default="")
     parser.add_argument("--run-base", type=bool, default=True)
     parser.add_argument("--folder", type=str, default=".")
@@ -107,43 +201,32 @@ def main() -> None:
         seed=args.seed,
     )
 
-    eval_prompts = get_questions_no_it(args.num_trials)
-    info_judge, info_tokenizer, truth_judge, truth_tokenizer  = build_tqa_judges()
+    eval_prompts, prompts_with_answers = get_mmlu_prompts(args.num_trials)
+    # print(f"eval prompts: {eval_prompts}")
+    # print(f"prompts with asnswers init: {prompts_with_answers}")
 
-    do_sample = args.temperature > 0
+    # do_sample = args.temperature > 0
+    do_sample = False
 
     # ---- Baseline ----
     if args.run_base:
         base_outputs = generate_batch(
             eval_prompts,
-            generate_fn=lambda p: steerer.generate_base(
+            generate_fn=lambda p: steerer.generate_base_MMLU(
                 p,
-                max_length=args.max_length,
                 max_new_tokens=args.max_new_tokens,
                 do_sample=do_sample,
                 temperature=args.temperature,
                 top_p=args.top_p,
-                repetition_penalty=args.repetition_penalty,
             ),
             label="Baseline",
         )
 
-        base_t, base_i = get_t_i_scores(info_judge, info_tokenizer, truth_judge, truth_tokenizer, tokenizer, eval_prompts, base_outputs)
-        base_ti = base_t*base_i
-        print(f"base t*i: {base_ti}")
-        print(f"base t: {base_t}")
-        print(f"base i: {base_i}")
+        base_accuracy = score_responses(base_outputs, prompts_with_answers)
+        print(f"base accuracy: {base_accuracy}")
 
-        base_dist_1 = distinct_n(base_outputs, 1)
-        base_dist_2 = distinct_n(base_outputs, 2)
-        base_dist_3 = distinct_n(base_outputs, 3)
     else:
-        base_ti=None
-        base_t=None
-        base_i=None
-        base_dist_1=None
-        base_dist_2=None
-        base_dist_3=None
+        base_accuracy=None
     # sweep params
     top_k_values = parse_list(args.top_k)
     alpha_values = parse_list(args.alpha)
@@ -169,24 +252,19 @@ def main() -> None:
                 )
                 steered_outputs = generate_batch(
                     eval_prompts,
-                    generate_fn=lambda p: steerer.generate_steered(
+                    generate_fn=lambda p: steerer.generate_steered_MMLU(
                         steered_model,
                         p,
-                        max_length=args.max_length,
                         max_new_tokens=args.max_new_tokens,
                         do_sample=do_sample,
                         temperature=args.temperature,
                         top_p=args.top_p,
-                        repetition_penalty=args.repetition_penalty,
                     ),
                     label=f"Steered k={top_k}, a={alpha}",
                 )
 
-            steered_t, steered_i = get_t_i_scores(info_judge, info_tokenizer, truth_judge, truth_tokenizer, tokenizer, eval_prompts, steered_outputs)
-            steered_ti = steered_t * steered_i
-            print(f"steered t*i: {steered_ti}")
-            print(f"steered t: {steered_t}")
-            print(f"steered i: {steered_i}")
+            steered_accuracy = score_responses(steered_outputs, prompts_with_answers)
+            print(f"steered accuracy: {steered_accuracy}")
 
             # elicitation = sum((not base_flags[i]) and steered_flags[i] for i in range(len(base_flags))) /  len(base_flags)
             # safening = sum(base_flags[i] and (not steered_flags[i]) for i in range(len(base_flags))) /  len(base_flags)
@@ -195,11 +273,7 @@ def main() -> None:
                 {
                     "top_k": top_k,
                     "alpha": alpha,
-                    "t": steered_t,
-                    "i": steered_i,
-                    "dist_1_steered": distinct_n(steered_outputs, 1),
-                    "dist_2_steered": distinct_n(steered_outputs, 2),
-                    "dist_3_steered": distinct_n(steered_outputs, 3),
+                    "accuracy": steered_accuracy,
                     "steered output": steered_outputs,
                     "unsteered output": base_outputs,
                 }
@@ -215,16 +289,11 @@ def main() -> None:
         "top_p": args.top_p,
         "repetition_penalty": args.repetition_penalty,
         "baseline": {
-            "base t*i": base_ti,
-            "base t": base_t,
-            "base i": base_i,
-            "dist_1": base_dist_1,
-            "dist_2": base_dist_2,
-            "dist_3": base_dist_3,
+            "base accuracy": base_accuracy,
         }, 
         "sweeps": sweeps,
     }
-    output_file = f"{args.folder}/iti_sweep_tqa_{args.model}_{args.num_trials}_{args.output}"
+    output_file = f"{args.folder}/iti_MMLU_{args.model}_{args.num_trials}_{args.output}"
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
 
