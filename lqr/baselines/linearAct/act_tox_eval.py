@@ -8,6 +8,8 @@ import torch
 from act.models.model_with_hooks import ModelWithHooks
 from transformers import pipeline, set_seed
 from act.models import get_model
+import argparse
+from act_configs import model_configs, hook_configs
 
 def toxicity_classifier(device: torch.device):
     pipeline_device = 0 if device.type == "cuda" else -1
@@ -33,26 +35,32 @@ def calculate_dist_n(texts_list: Sequence[str], n: int) -> float:
     return len(unique_ngrams) / len(ngrams)
 
 
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--model",
+    choices=["llama1b", "gemma2b", "qwen3b", "llama8b", "gemma9b", "qwen14b"],
+    default="gemma2b",
+)
+parser.add_argument(
+    "--method",
+    choices=["linearact", "meanact", "pid"],
+    default="linearact",
+)
+args = parser.parse_args()
 
 
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 cache_dir = Path('act-cache')
-# model_path ="meta-llama/Llama-3.2-1B"
-model_path = 'google/gemma-2-2b'
-# model_path = 'meta-llama/Meta-Llama-3-8B'
-# model_path = "Qwen/Qwen2.5-3B"
 
-# choose which modules to steer
-# module_patterns = ['model.layers.*.mlp.down_proj']
-module_patterns = [".*post_attention_layernorm", ".*post_feedforward_layernorm"]
-# module_patterns = ["model.layers.*.mlp.up_proj", "model.layers.*.mlp.down_proj", "model.layers.*.mlp.gate_proj"]
-# module_patterns = [
-#     "model.layers.*.self_attn.q_proj",
-#     "model.layers.*.self_attn.k_proj",
-#     "model.layers.*.self_attn.v_proj",
-#     "model.layers.*.self_attn.o_proj",
-# ]
+model_config_name = args.model
+config = model_configs[model_config_name]
+model_path = config["model_path"]
+module_patterns = config["module_patterns"]
+
+method=args.method
+hook_type = hook_configs[method]["hook_type"]
+quantiles_src = hook_configs[method]["quantiles_src"]
 
 seq_len = 128
 
@@ -64,10 +72,6 @@ model, tokenizer = get_model(
     dtype=torch.bfloat16 if device.startswith('cuda') else torch.float32,
     seq_len=seq_len,
 )
-
-# hook_type="linear_ot"
-# hook_type="mean_ot"
-hook_type="mean_ot_pid"
 
 seed = 42
 set_seed(seed)
@@ -105,9 +109,9 @@ baseline_texts = generate_batch(baseline_gen, prompts)
 completions: List[str] = []
 for idx, prompt in enumerate(prompts):
     completions.append(baseline_texts[idx][len(prompt):].strip())
-    if idx<3:
-        print("prompt: ", prompt)
-        print("baseline completion: ",completions[-1])
+    # if idx<3:
+    #     print("prompt: ", prompt)
+    #     print("baseline completion: ",completions[-1])
 
 curr_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 classifier = toxicity_classifier(curr_device)
@@ -155,7 +159,7 @@ for lam in strengths:
         strength=lam,
         device=device,
         dtype=torch.float32,
-        quantiles_src='q_0_100',
+        quantiles_src=quantiles_src,
     )
     model_hooks.register_hooks()
 
@@ -203,7 +207,7 @@ for lam in strengths:
 
     model_hooks.remove_hooks()
 
-out_path = Path(f'results/toxicity_sweep_{hook_type}_gemma2b.json')
+out_path = Path(f'results/toxicity_sweep_{hook_type}_{args.model}.json')
 out_path.parent.mkdir(parents=True, exist_ok=True)
 out_path.write_text(json.dumps(results, indent=2))
 print('saved', out_path)

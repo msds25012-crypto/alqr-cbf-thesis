@@ -53,8 +53,8 @@ class InterventionHook(torch.nn.Module):
         """
         # self.load_state_dict(torch.load(state_path)) #check
         state_path = Path(state_path)
-        self.load_state_dict(torch.load(state_path, map_location="cpu"), state_path=state_path)
-
+        self.load_state_dict(torch.load(state_path),state_path)
+                             
     @abc.abstractmethod
     def fit(self, *args, **kwargs):
         raise NotImplementedError("Method fit() must be implemented.")

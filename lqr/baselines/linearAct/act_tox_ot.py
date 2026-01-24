@@ -1,5 +1,6 @@
 from datasets import load_dataset
 from pathlib import Path
+import argparse
 import json
 import random
 import torch
@@ -9,6 +10,7 @@ from act.models.model_with_hooks import ModelWithHooks
 from act.datasets import get_dataset, get_dataloader
 from act.hooks import get_hook
 from act.datasets.responses_io import ResponsesLoader
+from act_configs import model_configs, hook_configs
 
 
 def get_tox_prompts(lb=0.8, ub=1.0):
@@ -52,31 +54,38 @@ with prompts_path.open('w') as f:
 print('saved', prompts_path, 'tox', len(toxic), 'nontox', len(nontoxic))
 
 
+
 # ======================
 # get modules for steering
 # ======================
 
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--model",
+    choices=["llama1b", "gemma2b", "qwen3b", "llama8b", "gemma9b", "qwen14b"],
+    default="gemma2b",
+)
+parser.add_argument(
+    "--method",
+    choices=["linearact", "meanact", "pid"],
+    default="linearact",
+)
+args = parser.parse_args()
+
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 cache_dir = Path('act-cache')
-# model_path ="meta-llama/Llama-3.2-1B"
-model_path = 'google/gemma-2-2b'
-# model_path = 'meta-llama/Meta-Llama-3-8B'
-# model_path = "Qwen/Qwen2.5-3B"
 
-# choose which modules to steer
-# module_patterns = ['model.layers.*.mlp.down_proj']
-module_patterns = [".*post_attention_layernorm", ".*post_feedforward_layernorm"]
-# module_patterns = ["model.layers.*.mlp.up_proj", "model.layers.*.mlp.down_proj", "model.layers.*.mlp.gate_proj"]
-# module_patterns = [
-#     "model.layers.*.self_attn.q_proj",
-#     "model.layers.*.self_attn.k_proj",
-#     "model.layers.*.self_attn.v_proj",
-#     "model.layers.*.self_attn.o_proj",
-# ]
+model_config_name = args.model
 
-# hook_type="linear_ot"
-# hook_type="mean_ot"
-hook_type="mean_ot_pid"
+if model_config_name not in model_configs:
+    raise ValueError(f"Unknown config_name: {model_config_name}")
+config = model_configs[model_config_name]
+model_path = config["model_path"]
+module_patterns = config["module_patterns"]
+
+method=args.method
+hook_type = hook_configs[method]["hook_type"]
+quantiles_src = hook_configs[method]["quantiles_src"]
 
 seq_len = 128
 
@@ -116,12 +125,12 @@ pooling_op = 'mean'
 
 model_hooks = ModelWithHooks(module=model, device=device)
 module_names = model_hooks.find_module_names(model, module_patterns)
-# module_names = module_names[:4]  # for testing
+module_names = module_names[:4]  # for testing
 print('num modules:', len(module_names))
 
 
 # ======================
-# sequential steering
+# sequentially collect hooks
 # ======================
 intervention_dir = cache_dir / 'interventions' / Path(model_path).name / f'{hook_type}_tox_incr'
 intervention_dir.mkdir(parents=True, exist_ok=True)
@@ -141,11 +150,13 @@ for mn in module_names:
             dtype=torch.float32,
             intervention_position='all',
             strength=1.0,
-            quantiles_src='q_0_100',
+            quantiles_src=quantiles_src,
         )
         prev.from_state_path(state_path)
-        # sd = torch.load(state_path, map_location="cpu")
-        # prev.load_state_dict(sd, state_path=state_path) 
+        # if args.method!= "pid":
+        #     prev.from_state_path(state_path)
+        # else:
+        #     prev.load_state_dict(torch.load(state_path), state_path=state_path) 
         hooks.append(prev)
 
     # response hook for current module
@@ -169,9 +180,6 @@ for mn in module_names:
         with torch.inference_mode():
             _ = model_hooks(batch)
 
-    # for h in model_hooks.get_hooks().values():
-    #     if hasattr(h, 'join'):
-    #         h.join()
 
     
     model_hooks.remove_hooks()
@@ -207,7 +215,7 @@ for mn in module_names:
         dtype=torch.float32,
         intervention_position='all',
         strength=1.0,
-        quantiles_src='q_0_100',
+        quantiles_src=quantiles_src,
     )
     hook.fit(responses=z, labels=y)
     hook.save_state_dict(state_path=intervention_dir / f'{mn}.statedict')
@@ -215,4 +223,3 @@ for mn in module_names:
     used_module_names.append(mn)
 
 print('saved incremental hooks to', intervention_dir)
-
