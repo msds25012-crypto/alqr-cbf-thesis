@@ -207,18 +207,7 @@ def get_ppl_from_file(filename, path=None, BATCH_SZ=10):
             data = json.load(file)
     except FileNotFoundError:
         return False
-    
-    # ppl = load("perplexity", module_type="metric")
 
-
-    # for sweep in data:
-
-    # unoutput = ppl.compute(predictions=data[0]["unsteered output"], model_id='gpt2-xl')
-    # ppl_unsteered = unoutput['mean_perplexity']
-    #                     # ppl_unsteered = unsteered_results['mean_perplexity']
-    # print(ppl_unsteered)
-
-    # for sweep in data[1]["sweeps"]:
     model_name = "mistralai/Mistral-7B-v0.1"
     model, tokenizer = load_model(model_name, quant=True)
 
@@ -242,11 +231,6 @@ def get_ppl_from_file(filename, path=None, BATCH_SZ=10):
             tokenizer=tokenizer,
             batch_size=BATCH_SZ
         )
-        # unoutput = ppl.compute(predictions=sweep["unsteered output"], model_id='gpt2-xl')
-        # stoutput = ppl.compute(predictions=sweep["steered output"], model_id='gpt2-xl')
-
-        # ppl_unsteered = unoutput['mean_perplexity']
-        # ppl_steered = stoutput['mean_perplexity']
 
         a=sweep["alpha"]
         k=sweep["top_k"]
