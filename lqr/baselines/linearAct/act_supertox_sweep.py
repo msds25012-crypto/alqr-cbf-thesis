@@ -57,9 +57,7 @@ def generate_batch(gen, prompts, max_new_tokens, temperature, top_p, repetition_
 
 
 def _completion_from_prompt(prompt, generated):
-    if generated.startswith(prompt):
-        return generated[len(prompt):].strip()
-    return generated.strip()
+    return generated[len(prompt):].strip()
 
 
 def _sample_prompts(prompts, num_trials):
@@ -83,7 +81,7 @@ def get_tox_prompts(lb=0.8, ub=1.0):
 
 def generation(models, hooks):
     # toxic_prompts = utils.get_tox_prompts(0.0, 1)
-    toxic_prompts=get_tox_prompts(0.9,1)
+    toxic_prompts=get_tox_prompts(0.0,1)
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     cache_dir = Path("act-cache")
@@ -108,8 +106,8 @@ def generation(models, hooks):
     top_p = 0.3
     repetition_penalty = 1.2
     strength = 1.0
-    # num_trials = 20 # for testing
-    # num_repeats = 3 # for testing
+    num_trials = 50 # for testing
+    num_repeats = 3 # for testing
 
 
     for model_name in models:
@@ -277,7 +275,7 @@ def mmlu(models, hooks):
             print(f"Finished MMLU model {model_name}")
         # with open("act_supertox_outputs/" + mmlu_filename + hook_name + ".txt", 'w') as file:
         # with open(PATH+"/" + mmlu_filename + hook_name + ".txt", 'w') as file:
-        output_path = PATH / f"{mmlu_filename}{hook_name}.txt"
+        output_path = PATH / f"{mmlu_filename}{hook_name}_{model_name}.txt"
         with output_path.open("w", encoding="utf-8") as file:
             json.dump(mmlu_data, file, indent=4)
 
@@ -287,6 +285,8 @@ def mmlu(models, hooks):
 def main():
     # Generate outputs, measure toxicity, and measure Dist 1,2,3
     models = list(model_configs.keys())
+    models=models[:1] #testing
+    # models=[models[i] for i in [0, 3]]
     hooks = list(hook_configs.keys())
     generation(models, hooks)
     print("Done with all generations")
@@ -295,9 +295,9 @@ def main():
     ppl(models, hooks)
     print("finish all PPL")
 
-    # Get MMLU performance
-    mmlu(models, hooks)
-    print("finish all MMLU")
+    # # Get MMLU performance
+    # mmlu(models, hooks)
+    # print("finish all MMLU")
 
 
 if __name__ == "__main__":
