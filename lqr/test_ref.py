@@ -207,6 +207,11 @@ def run_trials_ang(model, tokenizer, prompts, num_trials, A, X_contr, l_list=[1]
                     # for angle in range(-20,20,5):
                         contr_out = steer_contr.track_angular_setpoint(samples, k, target_degree=angle, lmbda=l, do_sample=do_sample)
                     
+                    contr_out = steer_contr.track_setpoint(samples, k, lmbda=l, do_sample=do_sample)
+                    # for angle in range(0,350,10):
+                    # # for angle in range(0,350,180):
+                    #     contr_out = steer_contr.track_angular_setpoint(samples, k, target_degree=angle, lmbda=l, do_sample=do_sample)
+                    
                     # print(f"Q = {q}, R = {r}, Qf = {qf}")
                     # print(f"STEERED:\n {contr_out}")
                     # for i, inp in enumerate(samples):
@@ -218,18 +223,18 @@ def run_trials_ang(model, tokenizer, prompts, num_trials, A, X_contr, l_list=[1]
                     # print(f"unsteered completions: {un_completions}")
 
 
-                        count_steered = sum(any(ss in comp for ss in refusal_ss) for comp in contr_out)
-                        count_steered_non = sum(all(ss not in comp for ss in refusal_ss) for comp in contr_out)
-                        
-                        sweep_data = {
-                            "lambda": l,
-                            "Q": q,
-                            "R": r, 
-                            "Qf": qf,
-                            "steered refused": count_steered,
-                            "steered nonrefused": count_steered_non,
-                            "target angle": angle,
-                            "steered output": contr_out,
+                    count_steered = sum(any(ss in comp for ss in refusal_ss) for comp in contr_out)
+                    count_steered_non = sum(all(ss not in comp for ss in refusal_ss) for comp in contr_out)
+                    
+                    sweep_data = {
+                        "lambda": l,
+                        "Q": q,
+                        "R": r, 
+                        "Qf": qf,
+                        "steered refused": count_steered,
+                        "steered nonrefused": count_steered_non,
+                        # "target angle": angle,
+                        "steered output": contr_out,
 
                         }
                         sweep_data_list.append(sweep_data)
@@ -256,8 +261,8 @@ def run_trials_ang(model, tokenizer, prompts, num_trials, A, X_contr, l_list=[1]
 
 def main():
     # prompts = utils.get_refused_prompts()
-    # model_name = "meta-llama/Llama-3.1-8B-Instruct"
-    model_name = "google/gemma-2-9B-it"
+    model_name = "meta-llama/Llama-3.1-8B-Instruct"
+    # model_name = "google/gemma-2-9B-it"
     # model_name = "Qwen/Qwen2.5-3B-Instruct"
     # model_name = "Qwen/Qwen2.5-14B-Instruct"
 
@@ -271,13 +276,13 @@ def main():
         add_generation_prompt=True
     ) for p in harmful_prompts]
 
-    ref = load_file("gemma-2-9b-it-ref")
-    nonref = load_file("gemma-2-9b-it-nonref")
-    jac = load_file("gemma-2-9b-it-nonref_jac")
+    # ref = load_file("gemma-2-9b-it-ref")
+    # nonref = load_file("gemma-2-9b-it-nonref")
+    # jac = load_file("gemma-2-9b-it-nonref_jac")
 
-    # ref = load_file("Llama-3.1-8B-Instruct-ref")
-    # nonref = load_file("Llama-3.1-8B-Instruct-nonref")
-    # jac = load_file("Llama-3.1-8B-Instruct-nonref_jac")
+    ref = load_file("Llama-3.1-8B-Instruct-ref")
+    nonref = load_file("Llama-3.1-8B-Instruct-nonref")
+    jac = load_file("Llama-3.1-8B-Instruct-nonref_jac")
     
     # ref = load_file("Qwen2.5-3B-Instruct-ref")
     # nonref = load_file("Qwen2.5-3B-Instruct-nonref")

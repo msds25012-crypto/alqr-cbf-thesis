@@ -322,6 +322,8 @@ class LQRSteering:
         # print(nm)
         # signal = raw_signal / nm
         signal = raw_signal
+        # signal = raw_signal / nm
+        signal = raw_signal
         self.setpoint_signals.append(th.mean(signal).item())
 
         if layer_idx == self.T-1:

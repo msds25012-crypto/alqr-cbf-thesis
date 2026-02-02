@@ -15,6 +15,8 @@ import yaml
 import matplotlib.pyplot as plt
 from statsmodels.nonparametric.smoothers_lowess import lowess
 import numpy as np
+from statsmodels.nonparametric.smoothers_lowess import lowess
+import numpy as np
 
 with open('config/config.yaml', 'r') as f:
     config_data = yaml.safe_load(f)

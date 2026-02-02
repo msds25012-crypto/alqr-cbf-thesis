@@ -137,7 +137,7 @@ def get_t_i_scores(tokenizer, outputs, it_format):
     h_evaluation_score = th.mean(th.tensor(h_classifications)).item()
     return t_evaluation_score, h_evaluation_score
 
-def run_trials(model, tokenizer, prompts, it_format, num_trials, A, X_contr, l_list=[1], q_list=[0.1], r_list=[10], qf_list=[0.1], k=50, do_sample=True, filename="json_out", batch_size=100):
+def run_trials(model, tokenizer, prompts, it_format, num_trials, A, X_contr, l_list=[1], q_list=[0.1], r_list=[10], qf_list=[0.1], k=50, do_sample=True, filename="json_out", batch_size=50):
     samples = random.sample(prompts, num_trials)
     # do_sample = False
     # print("lambda,q,r,qf,num_safeified,num_unsafeified,num_tox_un,num_tox_contr,dist1_base,dist2_base,dist3_base,dist1_steered,dist2_steered,dist3_steered, ppl_base, ppl_steered")

@@ -47,6 +47,18 @@ def get_safe_prompts():
     dataset = load_dataset("tatsu-lab/alpaca")
     return dataset['train'][:]["instruction"]
 
+
+def get_safe_prompt_with_response(tokenizer):
+    dataset = load_dataset("tatsu-lab/alpaca")
+    harmful_prompts = dataset['train'][:]["instruction"]
+    ps = [tokenizer.apply_chat_template(
+        [{"role": "user", "content": p["instruction"]}],
+        tokenize=False,
+        add_generation_prompt=True
+    ) + p["output"] for p in dataset['train']]
+    return ps
+
+
 def main():
     # model_name = "google/gemma-2-2b"
     # model_name = "Qwen/Qwen2.5-3B-Instruct"
@@ -69,29 +81,31 @@ def main():
         add_generation_prompt=True
     ) for p in harmful_prompts]
 
-    formatted_safe_prompts = [tokenizer.apply_chat_template(
-        [{"role": "user", "content": p}],
-        tokenize=False,
-        add_generation_prompt=True
-    ) for p in safe_prompts]
+    # formatted_safe_prompts = [tokenizer.apply_chat_template(
+    #     [{"role": "user", "content": p}],
+    #     tokenize=False,
+    #     add_generation_prompt=True
+    # ) for p in safe_prompts]
 
+
+    safe_with_response = get_safe_prompt_with_response(tokenizer)
 
 
     dataguy = ContrastiveBuilder(model, tokenizer)
-    filename = "Llama-3.1-8B-Instruct-ref"
-    dataguy.collect_data_batch(formatted_harmful_prompts, 416, filename)
-    # dataguy.collect_data_batch(formatted_harmful_prompts, 1, filename)
-    print("done with refused")
+    # filename = "Llama-3.1-8B-Instruct-ref"
+    # dataguy.collect_data_batch(formatted_harmful_prompts, 416, filename, batch_size=12)
+    # # dataguy.collect_data_batch(formatted_harmful_prompts, 1, filename)
+    # print("done with refused")
 
-    filename = "Llama-3.1-8B-Instruct-nonref"
-    dataguy.collect_data_batch(formatted_safe_prompts, 512, filename)
-    # dataguy.collect_data_batch(formatted_safe_prompts, 1, filename)
-    print("done with not refused")
+    # filename = "Llama-3.1-8B-Instruct-nonref"
+    # dataguy.collect_data_batch(safe_with_response, 200, filename, batch_size=12)
+    # # dataguy.collect_data_batch(formatted_safe_prompts, 1, filename)
+    # print("done with not refused")
 
     # # for i in range(10):
-    # filename = f"Qwen2.5-3B-Instruct-nonref_jac"
-    # dataguy.collect_jacobians(formatted_safe_prompts, 15, filename)
-    # # dataguy.collect_jacobians(formatted_safe_prompts, 1, filename)
+    filename = f"Llama-3.1-8B-Instruct-nonref_jac"
+    dataguy.collect_jacobians(safe_with_response, 15, filename, max_ctx=32)
+    # dataguy.collect_jacobians(formatted_safe_prompts, 1, filename)
     # print(f"done with jac")
 
 if __name__ == "__main__":

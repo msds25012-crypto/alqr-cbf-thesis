@@ -150,10 +150,11 @@ def tqa_prompts():
 def main():
     # model_name = "google/gemma-2-2b"
     # model_name = "Qwen/Qwen2.5-3B-Instruct"
-    # model_name = "meta-llama/Llama-3.1-8B-Instruct"
+    model_name = "meta-llama/Llama-3.1-8B-Instruct"
     # model_name = "google/gemma-2-9b-it"
     model_name = "google/gemma-2-2b"
     # model_name = "Qwen/Qwen2.5-14B-Instruct"
+    # model_name = "meta-llama/Meta-Llama-3-8B"
     # model_name = "meta-llama/Meta-Llama-3-8B"
     model, tokenizer = load_model(model_name, quant=True)
     # messages = [
