@@ -72,6 +72,7 @@ def main():
     
     k=80
     tref.run_trials_ang(
+    tref.run_trials_ang(
         model, 
         tokenizer, 
         formatted_harmful_prompts, 

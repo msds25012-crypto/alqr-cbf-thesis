@@ -1,6 +1,7 @@
 import json
 
-filename = 'gemma-2-9b-angle_sweep.txt'
+# filename = 'qwen_angle_sweep_ELECTRICBOOGALOO.txt'
+filename = 'qwen2.5-3b-ref_sweep.txt'
 
 with open(filename, 'r') as file:
     data = json.load(file) # json.load() directly reads from a file object

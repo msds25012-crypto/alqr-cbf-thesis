@@ -78,7 +78,7 @@ class LQRSteering:
 
         self.hooks = []
         self.mode = None
-        self.ALL_TOKENS = False
+        self.ALL_TOKENS = True
         
 
         self.setpoint_signals = []
