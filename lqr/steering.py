@@ -16,6 +16,7 @@ class Mode(Enum):
     TRACKING = 1
     STEERING = 2
     SETPOINT = 3
+    ANGULAR = 4
 
 class LQRSteering:
     '''
@@ -63,6 +64,7 @@ class LQRSteering:
         else:
             self.B = th.eye(self.n).repeat(self.T, 1, 1).to(self.device) 
             self.K = lqr.time_varying_lqr(self.A, self.B, self.Q, self.R, self.Qf) if A is not None else None
+            # print(f"self.K[0]: {self.K[0]}")
 
 
         self.X = None # to allocate at runtime
@@ -78,7 +80,7 @@ class LQRSteering:
 
         self.hooks = []
         self.mode = None
-        self.ALL_TOKENS = True
+        self.ALL_TOKENS = False
         
 
         self.setpoint_signals = []
@@ -205,40 +207,73 @@ class LQRSteering:
 
     # def get_angular_sp(x, target_degree, basis1, basis2):
     def get_angular_sp(self, x, layer_idx):
-        basis1 = self.E[layer_idx]
-        basis2 = self.basis2
-        assert len(basis1.shape) == 1
-        assert len(basis2.shape) == 1
-        assert basis1.shape == basis2.shape
+        '''
+        Adapted from Angular Steering repo (https://github.com/lone17/angular-steering/)
+        
+        :param x: latent activation at layer
+        :param layer_idx: layer index
+        '''
 
-        n = basis1.shape[-1]
+        # return e
+        first_direction = self.E[layer_idx]
+        second_direction = self.basis2
 
-        # ensure bases are orthonormal
-        u = basis1 / th.linalg.norm(basis1)
-        v = basis2 - (basis2 @ u) * u
-        v /= th.linalg.norm(v)
+        # Compute rotation
+        device = first_direction.device
+        theta_rad = th.tensor(self.target_degree * th.pi / 180.0, device=device)
 
-        theta = th.deg2rad(self.target_degree)
-        cos_theta = th.cos(theta)
-        sin_theta = th.sin(theta)
+        if first_direction.norm() == 0:
+            # print("goddamn motherfucker")
+            return x
 
-        P = th.outer(u, u) + th.outer(v, v)
+        # Orthonormalize directions
+        b1 = first_direction / first_direction.norm()
+        b2 = second_direction - (second_direction @ b1) * b1
+        b2 = b2 / b2.norm()
 
-        # rotate counter-clockwise
-        R_theta = th.tensor([[cos_theta, -sin_theta], [sin_theta, cos_theta]], dtype=th.float, device=self.device)
+        # Projection matrix
+        proj_matrix = th.outer(b1, b1) + th.outer(b2, b2)
 
-        uv = th.column_stack([u, v])
+        # Rotation matrix
+        cos_theta = th.cos(theta_rad)
+        sin_theta = th.sin(theta_rad)
+        rotation_matrix = th.stack(
+            [th.stack([cos_theta, -sin_theta]), th.stack([sin_theta, cos_theta])]
+        )
 
-        rotated_component = uv @ R_theta @ th.tensor([1, 0], dtype=th.float, device=self.device)
-        Px = x @ P
-        scale = th.linalg.norm(Px, axis=-1, keepdims=True)
+        # Steering vector
+        unit_vector = th.tensor([1.0, 0.0], device=device)
+        rotated_2d = rotation_matrix @ unit_vector
+        steering_vector = rotated_2d[0] * b1 + rotated_2d[1] * b2
 
-        # result = x - Px + scale * rotated_component
-        # return result
+        _cache = {}
 
-        e = -Px + scale * rotated_component
+        dtype = self.model.dtype
+        cache_key = (device, dtype)
 
-        return e
+        if cache_key not in _cache:
+            _cache[cache_key] = (
+                proj_matrix.to(device=device, dtype=dtype),
+                steering_vector.to(device=device, dtype=dtype),
+                first_direction.to(device=device, dtype=dtype),
+            )
+
+        proj, steer, first_dir = _cache[cache_key]
+
+        projected = x @ proj
+        scale = projected.norm(dim=-1, keepdim=True)
+
+        # # adaptive    
+        # proj_to_first = x @ first_dir
+        # mask = (proj_to_first > 0).unsqueeze(-1)
+        # steered = x - projected + scale * steer
+        # return th.where(mask, steered, x)
+
+        # # non adaptive
+        steered = x - projected + scale * steer
+        if th.isnan(projected).any().item():
+            raise ValueError(f"ZOINKS SCOOB!!!!!!: {layer_idx}")
+        return steered
 
     def hook_setpoint_tracking(self, layer_idx, module, input, output):
         # assume E_normed is unit vector in direction of contrastive feature
@@ -261,7 +296,8 @@ class LQRSteering:
                 # print(f"e shape: {e.shape}")
             elif self.setpoint_type == "angular":
                 # print("DOING THE THING")
-                e = self.get_angular_sp(x, layer_idx)
+                e = self.get_angular_sp(x, layer_idx) - x
+                # e = self.get_angular_sp(x, layer_idx)
             else:
                 raise ValueError("Unsupported setpoint type")
 
@@ -282,20 +318,27 @@ class LQRSteering:
 
             if self.setpoint_type == "linear":
                 v = self.E_unit[layer_idx]
+                # print(f"v: {v}")
                 alpha = th.tensor([self.betas[layer_idx] for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
+                # alpha = th.tensor([th.norm(x[i]) for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
                 e = alpha.squeeze(0).T @ v.unsqueeze(0)
+                # print(f"e: {e}")
             elif self.setpoint_type == "angular":
                 # print("DOING THE THING")
                 e = self.get_angular_sp(x, layer_idx)
             else:
                 raise ValueError("Unsupported setpoint type")
+            # u_t = th.bmm(self.K[layer_idx].unsqueeze(0), th.transpose(e.unsqueeze(0),-2,-1)).squeeze(0).T
             u_t = th.bmm(self.K[layer_idx].unsqueeze(0), th.transpose(e.unsqueeze(0),-2,-1)).squeeze(0).T
             self.U[layer_idx] = u_t[-1]
+
 
             if isinstance(output,tuple):
                 output[0][...,-1,:] = output[0][...,-1,:] + u_t
             else: 
                 output[...,-1,:] = output[...,-1,:] + u_t
+
+            # print(f"output: {output}")
             return output
 
     def register_setpoint_tracking_hooks(self):
@@ -366,6 +409,99 @@ class LQRSteering:
                 )
             )
 
+    def get_angular_steering_output_hook(
+        self,
+        target_degree: float,
+        adaptive_mode: int = 1,
+        layer_idx: int = 0,
+    ):
+        """
+        Taken from Angular Steering repo (https://github.com/lone17/angular-steering/)
+
+        Create a hook that applies angular steering to layer outputs.
+
+        Args:
+            steering_config: Dict with 'first_direction' and 'second_direction' numpy arrays
+            target_degree: Rotation angle in degrees (0-360)
+            adaptive_mode: Steering application mode:
+                        0 = always steer all activations
+                        1 = only steer when activation is aligned with first_direction (conditional)
+
+        Returns:
+            Hook function that applies angular steering transformation to module outputs
+        """
+        first_direction = self.E[layer_idx]
+        second_direction = self.basis2
+
+        # Compute rotation
+        device = first_direction.device
+        theta_rad = th.tensor(target_degree * th.pi / 180.0, device=device)
+
+        # Orthonormalize directions
+        b1 = first_direction / first_direction.norm()
+        b2 = second_direction - (second_direction @ b1) * b1
+        b2 = b2 / b2.norm()
+
+        # Projection matrix
+        proj_matrix = th.outer(b1, b1) + th.outer(b2, b2)
+
+        # Rotation matrix
+        cos_theta = th.cos(theta_rad)
+        sin_theta = th.sin(theta_rad)
+        rotation_matrix = th.stack(
+            [th.stack([cos_theta, -sin_theta]), th.stack([sin_theta, cos_theta])]
+        )
+
+        # Steering vector
+        unit_vector = th.tensor([1.0, 0.0], device=device)
+        rotated_2d = rotation_matrix @ unit_vector
+        steering_vector = rotated_2d[0] * b1 + rotated_2d[1] * b2
+
+        _cache = {}
+
+        def steering_hook(_module, _input, output):
+            device = output.device
+            dtype = output.dtype
+            cache_key = (device, dtype)
+
+            if cache_key not in _cache:
+                _cache[cache_key] = (
+                    proj_matrix.to(device=device, dtype=dtype),
+                    steering_vector.to(device=device, dtype=dtype),
+                    first_direction.to(device=device, dtype=dtype),
+                )
+
+            proj, steer, first_dir = _cache[cache_key]
+
+            projected = output @ proj
+            scale = projected.norm(dim=-1, keepdim=True)
+
+            if adaptive_mode == 0:
+                steered = output - projected + scale * steer
+                return steered
+            elif adaptive_mode == 1:
+                proj_to_first = output @ first_dir
+                mask = (proj_to_first > 0).unsqueeze(-1)
+                steered = output - projected + scale * steer
+                return th.where(mask, steered, output)
+            else:
+                raise ValueError(f"Unknown adaptive_mode: {adaptive_mode}")
+
+        return steering_hook
+
+    def register_angular_steering_hooks(self):
+        """Register the hooks."""
+
+        for layer_idx, layer in enumerate(self.model.model.layers):
+            self.hooks.append(
+                layer.register_forward_hook(
+                    self.get_angular_steering_output_hook(
+                        target_degree=self.target_degree,
+                        layer_idx=layer_idx,
+                    )
+                )
+            )
+
     def remove_hooks(self):
         for hook in self.hooks:
             hook.remove()
@@ -380,6 +516,8 @@ class LQRSteering:
             self.register_tracking_hooks()
         elif self.mode == Mode.SETPOINT:
             self.register_setpoint_tracking_hooks()
+        elif self.mode == Mode.ANGULAR:
+            self.register_angular_steering_hooks()
         else:
             print("generating with no steering applied")
 
@@ -422,6 +560,7 @@ class LQRSteering:
         self.setpoint_type = "linear"
         self.SIGNAL_COLLECT = True
         self.setpoint_signals = []
+        print("python is garbage")
         # inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
         inputs = self.tokenizer(
             prompt, 
@@ -436,10 +575,14 @@ class LQRSteering:
         self.E_unit = th.zeros_like(self.E)
         self.betas = [0 for i in range(self.T+1)]
         for i, e in enumerate(self.E):
-            # print(f"e: {e}")
+            # print(f"e in setpoint: {e}")
             nrm = th.linalg.norm(e)
-            self.E_unit[i] = e / nrm
-            self.betas[i] = lmbda * nrm
+            # print(f"nrm in setpoint: {nrm}")
+            if nrm == 0:
+                self.E_unit[i] = self.E_unit[i]*0
+            else:
+                self.E_unit[i] = e / nrm
+                self.betas[i] = lmbda * nrm
 
         with self:
             output = self.model.generate(
@@ -460,9 +603,50 @@ class LQRSteering:
         output_str = self.tokenizer.batch_decode(output.sequences, skip_special_tokens=True)
         return output_str
         
+
     def track_angular_setpoint(self, prompt, max_new_tokens, target_degree, lmbda=1, do_sample=False, temp=0.7):
         self.mode = Mode.SETPOINT
         self.setpoint_type = "angular"
+        self.ALL_TOKENS = True
+        self.target_degree = th.tensor(target_degree)
+
+        # inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        inputs = self.tokenizer(
+            prompt, 
+            return_tensors="pt", 
+            padding=True,
+            truncation=True,
+        ).to(self.device)
+        input_ids = inputs["input_ids"]
+        attention_mask = inputs["attention_mask"]
+        self.X = th.zeros((self.T+1, self.n)).to(self.device)
+
+        refusal_dirs = self.E.cpu()
+        pca_model = PCA().fit(refusal_dirs)
+
+        components = pca_model.components_
+        self.basis2 = th.tensor(components[0].copy(), dtype=th.float, device=self.device)
+
+        with self:
+            output = self.model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=max_new_tokens,
+                return_dict_in_generate=True,
+                do_sample=do_sample,
+                temperature=temp,
+                use_cache=False,
+                pad_token_id=self.tokenizer.eos_token_id,
+                # **model_generation_kwargs, #
+            )
+
+        # output_str = self.tokenizer.decode(output.sequences[0], skip_special_tokens=True)
+        output_str = self.tokenizer.batch_decode(output.sequences, skip_special_tokens=True)
+        self.ALL_TOKENS = False
+        return output_str
+
+    def angular_steer(self, prompt, max_new_tokens, target_degree, lmbda=1, do_sample=False, temp=0.7):
+        self.mode = Mode.ANGULAR
         self.target_degree = th.tensor(target_degree)
 
         # inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
