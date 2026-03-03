@@ -17,25 +17,64 @@ def get_harmful_instructions():
     return train, test
 
 
+def get_best_dir(X_contr):
+    print(f"contrrrrrrr: {X_contr[0]}")
+    candidates_normalized = [
+        v / v.norm() if not (v.norm() == 0) else v for v in X_contr 
+    ]
+    print(f"normalized: {candidates_normalized[0]}")
+    candidates_stack = th.stack(
+        candidates_normalized
+    )
+    print(f"stack: {candidates_stack[0]}")
+
+    # Compute pairwise cosine similarities
+    pairwise_cosine = candidates_stack @ candidates_stack.T
+    mean_cosine = pairwise_cosine.mean(dim=-1)
+
+    # Find layer with highest mean cosine similarity
+    max_idx = mean_cosine.argmax().item()
+    # print(f"selected: {})
+
+    # Log layer selection info
+    print(f"\n  Max sim layer selection:")
+    for i, key in enumerate(X_contr):
+        # layer_num = int(key.split("_")[1])
+        marker = " ← SELECTED" if i == max_idx else ""
+        print(
+            f"    Layer {i}: cosine={mean_cosine[i].item():.4f}{marker}"
+        )
+    all_best = [
+        X_contr[max_idx] for x in X_contr
+    ]
+    # print(all_best)
+    best_stack = th.stack(
+        all_best
+    )
+    return best_stack
 
 
 def main():
     models = {
             "llama8b": "meta-llama/Llama-3.1-8B-Instruct",
             "qwen3b": "Qwen/Qwen2.5-3B-Instruct",
-            "gemma9b": "google/gemma-2-9b-it"
+            "qwen14b": "Qwen/Qwen2.5-14B-Instruct",
+            "gemma9b": "google/gemma-2-9b-it",
+            "llama3b": "meta-llama/Llama-3.2-3B-Instruct"
         }
 
     model_keys = {  
             "meta-llama/Llama-3.1-8B-Instruct": "Llama-3.1-8B-Instruct",
             "Qwen/Qwen2.5-3B-Instruct": "Qwen2.5-3B-Instruct",
-            "google/gemma-2-9b-it": "gemma-2-9b-it"
+            "Qwen/Qwen2.5-14B-Instruct": "Qwen2.5-14B-Instruct",
+            "google/gemma-2-9b-it": "gemma-2-9b-it",
+            "meta-llama/Llama-3.2-3B-Instruct": "Llama-3.2-3B-Instruct"
         }
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--model",
-        choices=["qwen3b", "llama8b", "gemma9b"],
+        choices=["qwen3b", "llama8b", "gemma9b", "llama3b", "qwen14b"],
         default="llama8b",
     )
 
@@ -45,6 +84,18 @@ def main():
         default="lfs",
     )
 
+    parser.add_argument(
+        "--steering",
+        choices=["lqr", "pid"],
+        default="lqr",
+    )
+
+    parser.add_argument(
+        "--asr-only",
+        choices=["1", "0"],
+        default="0",
+    )
+
     args = parser.parse_args()
 
     if args.model in models:
@@ -52,49 +103,23 @@ def main():
         print(f"Running model: {model_name}")
     else:
         raise ValueError("vro...")
-    # prompts = utils.get_refused_prompts()
-    # model_name = "meta-llama/Llama-3.1-8B-Instruct"
-    # model_name = "Qwen/Qwen2.5-3B-Instruct"
-    # model_name = "Qwen/Qwen2.5-14B-Instruct"
-    # model_name = "google/gemma-2-9B-it"
+    l_list = [1]
 
-    # output_filename = "gemma-2-9b-it-TEST"
-    # output_filename = "llama-8b-it-angle-qrqf-sweep"
-    # output_filename = "gemma-2-9B-it-one-token-lfs-sanity"
-
-    # l_list = [0.5, 1, 1.5, 2, 2.5]
-    # l_list = [0.7,0.8,0.9,1,1.1,1.2,1.3]
-    l_list = [1.5]
-    # l_list = [1, 1.5, 2]
-
-    # q_list = [0.1]
-    # r_list = [1]
-    # qf_list = [10]
-    # q_list = [0.1]
-    # r_list = [1]
-    # qf_list = [10]
-    q_list = [1]
-    r_list = [1]
+    q_list = [0.1, 1]
+    r_list = [11, 12]
     qf_list = [0.1]
-    m = model_name.split("/")[-1]
-    output_filename = f"{m}_{args.setpoint}_{q_list[0]}_{r_list[0]}_{qf_list[0]}"
 
-# q: 0.1, r: 1, qf: 10
+    kp_list = [0.05, 0.1]
+    ki_list = [0.0, 0.025]
+    kd_list = [0.0, 0.025]
+
+
+    m = model_name.split("/")[-1]
+    output_filename = f"{m}_{args.setpoint}_{args.steering}steering"
+
 
     key = model_keys[model_name]
     
-    # ref = tref.load_file("gemma-2-9b-it-ref")
-    # nonref = tref.load_file("gemma-2-9b-it-nonref")
-    # # nonref = tref.load_file("gemma-2-9b-it-compliant")
-    # jac = tref.load_file("gemma-2-9b-it-nonref_jac")
-    
-    # ref = tref.load_file("Qwen2.5-3B-Instruct-ref")
-    # nonref = tref.load_file("Qwen2.5-3B-Instruct-nonref")
-    # jac = tref.load_file("Qwen2.5-3B-Instruct-nonref_jac")
-
-    # ref = load_file("Qwen2.5-14B-Instruct-ref")
-    # nonref = load_file("Qwen2.5-14B-Instruct-nonref")
-    # jac = load_file("Qwen2.5-14B-Instruct-nonref_jac")
 
     ref = tref.load_file(key + "-ref")
     nonref = tref.load_file(key + "-nonref")
@@ -102,7 +127,6 @@ def main():
 
 
     model, tokenizer = tref.utils.load_model(model_name, quant=True)
-    # harmful_prompts = tref.utils.get_refused_prompts()[416:]
     _, harmful_prompts = get_harmful_instructions()
     formatted_harmful_prompts = [tokenizer.apply_chat_template(
         [{"role": "user", "content": p + "\n\n"}],
@@ -121,15 +145,6 @@ def main():
     print(f"A shape: {A.shape}")
 
 
-    # X_contr_norm = X_contr #/ th.norm(X_contr)
-    # prefix_sum = th.cumsum(X_contr_norm, dim=0)
-    # shifted_refusal_dirs = X_contr_norm.roll(1, dims=0)
-    # shifted_refusal_dirs[0] = X_contr_norm[0]
-    # diff_from_first = X_contr_norm - shifted_refusal_dirs
-    
-    # X_contr = 0.9*X_contr_norm + 0.01*prefix_sum + 0.01*diff_from_first
-    
-    
     k=512
     
 
@@ -137,77 +152,151 @@ def main():
     # num_trials = 1
     
 
-    if args.setpoint == 'lfs':
-        X_contr = X - X_ref
-        del X
-        del X_ref
-        tref.run_trials_lfs(
-            model, 
-            tokenizer, 
-            formatted_harmful_prompts, 
-            num_trials, 
-            A, 
-            X_contr, 
-            l_list, 
-            q_list, 
-            r_list, 
-            qf_list,
-            k=k,
-            do_sample=False,
-            filename=output_filename,
-            batch_size=50
-        )
-    elif args.setpoint == 'ang':
-        X_contr = X_ref - X
-        del X
-        del X_ref
-        tref.run_trials_ang(
-            model, 
-            tokenizer, 
-            formatted_harmful_prompts, 
-            num_trials, 
-            A, 
-            X_contr, 
-            l_list, 
-            q_list, 
-            r_list, 
-            qf_list,
-            k=k,
-            do_sample=False,
-            filename=output_filename,
-            batch_size=50
-        )
-    else:
-        raise ValueError("bubby")
+    if not args.asr_only == '1':
+        if args.setpoint == 'lfs':
+            X_contr = X - X_ref
+            del X
+            del X_ref
+
+            if args.steering == 'lqr':
+                tref.run_trials_lfs(
+                    model, 
+                    tokenizer, 
+                    formatted_harmful_prompts, 
+                    num_trials, 
+                    A, 
+                    X_contr, 
+                    l_list, 
+                    q_list, 
+                    r_list, 
+                    qf_list,
+                    k=k,
+                    do_sample=False,
+                    filename=output_filename,
+                    batch_size=50
+                )
+            elif args.steering == 'pid':
+                print("In PID")
+                tref.run_trials_pid(
+                    model, 
+                    tokenizer, 
+                    formatted_harmful_prompts, 
+                    num_trials, 
+                    A, 
+                    X_contr, 
+                    l_list, 
+                    kp_list, 
+                    ki_list, 
+                    kd_list,
+                    k=k,
+                    do_sample=False,
+                    filename=output_filename,
+                    batch_size=50
+                )
+            else:
+                raise ValueError(f"Steering specification invalid: {args.steering}")
+
+
+        elif args.setpoint == 'ang':
+            X_contr = X_ref - X
+            del X
+            del X_ref
+            # X_contr = get_best_dir(X_contr)
+            tref.run_trials_ang(
+                model, 
+                tokenizer, 
+                formatted_harmful_prompts, 
+                num_trials, 
+                A, 
+                X_contr, 
+                [180], 
+                q_list, 
+                r_list, 
+                qf_list,
+                k=k,
+                do_sample=False,
+                filename=output_filename,
+                batch_size=50
+            )
+        else:
+            raise ValueError("bubby")
 
 
     # del X_contr
     print("__________________________________________\nFinished Initial Sweep\n__________________________________________")
 
+    
     import asr as asr
 
-    it_format = asr.llama_it_format
+    formats = {
+        "llama3b": asr.llama_small_it_format,
+        "llama8b": asr.llama_it_format,
+        "qwen3b": asr.qwen_it_format,
+        "qwen14b": asr.qwen_it_format,
+        "gemma9b": asr.gemma_it_format
+    }
+
+    it_format = formats[args.model]
+
+
 
     data_file_path = asr.PATH + output_filename + ".txt"
     with open(data_file_path, 'r') as file:
         data = json.load(file)
 
-    print("UNSTEERED")
-    inps = asr.get_classifier_inputs(it_format, data[0]["unsteered output"])
-    u_score = asr.harmbench_judge(inps,batch_size=4)
-    data[0]["unsteered ASR"] = u_score
+    if args.setpoint == 'lfs':
+        if args.steering == 'lqr':
+            if "unsteered ASR" not in data:
+                print("UNSTEERED")
+                inps = asr.get_classifier_inputs(it_format, data["unsteered output"])
+                u_score = asr.harmbench_judge(inps,batch_size=4)
+                data["unsteered ASR"] = u_score
+            for d in data["sweeps"]:
+                q = d["Q"]
+                r = d["R"]
+                qf = d["Qf"]
+                # print("hererereer")
+                if "Steered ASR" not in d:
+                    print("STEERED")
+                    l = d["lambda"]
+                    print(f"lambda: {l}, q: {q}, r: {r}, qf: {qf}")
+                    inps = asr.get_classifier_inputs(it_format, d["steered output"])
+                    s_score = asr.harmbench_judge(inps,batch_size=4)
+                    d["Steered ASR"] = s_score
+            
+        else:
+            for d in data["sweeps"]:
+                kp = d["Kp"]
+                ki = d["Ki"]
+                kd = d["Kd"]
+                l = d["lambda"]
+                if "Steered ASR" not in d:
+                    print(f"lambda: {l}, kp: {kp}, ki: {ki}, kd: {kd}")
+                    inps = asr.get_classifier_inputs(it_format, d["steered output"])
+                    s_score = asr.harmbench_judge(inps,batch_size=4)
+                    d["Steered ASR"] = s_score
 
-    print("STEERED")
-    for d in data[1]["sweeps"]:
-        q = d["Q"]
-        r = d["R"]
-        qf = d["Qf"]
-        l = d["lambda"]
-        print(f"lambda: {l}, q: {q}, r: {r}, qf: {qf}")
-        inps = asr.get_classifier_inputs(it_format, d["steered output"])
-        s_score = asr.harmbench_judge(inps,batch_size=4)
+    else:
+        if "unsteered ASR" not in data:
+            print("UNSTEERED")
+            inps = asr.get_classifier_inputs(it_format, data["unsteered output"])
+            u_score = asr.harmbench_judge(inps,batch_size=4)
+            data["unsteered ASR"] = u_score
 
-        d["Steered ASR"] = s_score
+        for d in data["sweeps"]:
+            q = d["Q"]
+            r = d["R"]
+            qf = d["Qf"]
+            a_sweep = d["angle sweep"]
+            for a in a_sweep:
+                if "Steered ASR" not in a:
+                    angle = a["angle"]
+                    print(f"angle: {angle}, q: {q}, r: {r}, qf: {qf}")
+                    inps = asr.get_classifier_inputs(it_format, a["steered output"])
+                    s_score = asr.harmbench_judge(inps,batch_size=4)
+                    a["Steered ASR"] = s_score
+
+
 
     with open(data_file_path, 'w') as file:
         json.dump(data, file, indent=4)
