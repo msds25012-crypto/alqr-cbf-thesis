@@ -9,7 +9,7 @@ from PIDsteering import PIDSteering
 from datasets import load_dataset
 import random
 import time
-from evaluate import load
+# from evaluate import load
 import ref_data_script as utils
 import json
 import yaml
@@ -352,25 +352,97 @@ def run_trials_ang(model, tokenizer, prompts, num_trials, A, X_contr, angles, q_
     end_time = time.perf_counter()
     print(f"runtime: {end_time - start_time}")
 
+
+############################################################################################################
+
+############################################################################################################
+
+
+
+def demo(model, tokenizer, prompt, A, X_contr, l_list=[1], q_list=[0.1], r_list=[10], qf_list=[0.1], k=50, do_sample=False, run_base=False, batch_size=32):
+    start_time = time.perf_counter()
+    output_str = []
+    data_list = []
+            # k=50
+    inputs = tokenizer(
+            prompt, 
+            return_tensors="pt", 
+            padding=True,
+            truncation=True,
+        ).to(device)
+    input_ids = inputs["input_ids"]
+    attention_mask = inputs["attention_mask"]
+
+    with th.no_grad():
+        output_un = model.generate(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        max_new_tokens=k,
+                        return_dict_in_generate=True,
+                        do_sample=do_sample,
+                        top_p=0.3,
+                        repetition_penalty=1.2,
+                        temperature=1,
+                        use_cache=False,
+                        pad_token_id=tokenizer.eos_token_id,
+                    )
+
+    output = tokenizer.batch_decode(output_un.sequences, skip_special_tokens=True)
+
+    print("-------------------------------- Base Model --------------------------------")
+    print(output)
+    print("----------------------------------------------------------------------------")
+
+    for q in q_list:
+        for r in r_list:
+            for qf in qf_list:
+
+                steer_contr = LQRSteering(model, tokenizer, q=q,r=r,qf=qf, A=A, contrastive_vecs=X_contr, perserve_mem=True)
+                temp_data = []
+                for l in l_list:
+                    contr = steer_contr.track_setpoint(prompt, k, lmbda=l, do_sample=do_sample)
+                    print(f"-------------------- Steered - q: {q}, r: {r}, qf: {qf} --------------------")
+                    print(contr[0])
+                    print(f"----------------------------------------------------------------------------")
+
+
+    end_time = time.perf_counter()
+    print(f"runtime: {end_time - start_time}")
+
+
+
+
 def main():
     # prompts = utils.get_refused_prompts()
-    # model_name = "meta-llama/Llama-3.1-8B-Instruct"
+    model_name = "meta-llama/Llama-3.1-8B-Instruct"
     # model_name = "Qwen/Qwen2.5-3B-Instruct"
     # model_name = "Qwen/Qwen2.5-14B-Instruct"
-    model_name = "google/gemma-2-9b-it"
+
+    prompt = input("Enter a prompt: ")
+
+    # Store the sentence in a string variable
+
+    # model_name = "google/gemma-2-9b-it"
     model, tokenizer = utils.load_model(model_name, quant=True)
-    harmful_prompts = utils.get_refused_prompts()[416:]
+    # harmful_prompts = utils.get_refused_prompts()[416:]
+    # formatted_harmful_prompts = [tokenizer.apply_chat_template(
+    #     [{"role": "user", "content": p}],
+    #     tokenize=False,
+    #     add_generation_prompt=True
+    # ) for p in harmful_prompts]
+
     formatted_harmful_prompts = [tokenizer.apply_chat_template(
-        [{"role": "user", "content": p}],
+        [{"role": "user", "content": prompt}],
         tokenize=False,
         add_generation_prompt=True
-    ) for p in harmful_prompts]
+    )]
     # ref = load_file("llama-3.1-8B-it-ref")
     # nonref = load_file("llama-3.1-8B-it-nonref")
     # jac = load_file("llama-3.1-8B-it-nonref_jac")
 
-    # tox = load_file("Llama-3.1-8B-Instruct-tox")
-    # nontox = load_file("Llama-3.1-8B-Instruct-nontox")
+    ref = load_file("Llama-3.1-8B-Instruct-ref")
+    nonref = load_file("Llama-3.1-8B-Instruct-nonref")
+    jac = load_file("Llama-3.1-8B-Instruct-nonref_jac")
     
     # ref = load_file("Qwen2.5-3B-Instruct-ref")
     # nonref = load_file("Qwen2.5-3B-Instruct-nonref")
@@ -380,10 +452,12 @@ def main():
     # nonref = load_file("Qwen2.5-14B-Instruct-nonref")
     # jac = load_file("Qwen2.5-14B-Instruct-nonref_jac")
 
-    ref = load_file("gemma-2-9b-it-ref")
-    nonref = load_file("gemma-2-9b-it-nonref")
-    # nonref = load_file("gemma-2-9b-it-compliant")
-    jac = load_file("gemma-2-9b-it-nonref_jac")
+    # ref = load_file("gemma-2-9b-it-ref")
+    # nonref = load_file("gemma-2-9b-it-nonref")
+    # # nonref = load_file("gemma-2-9b-it-compliant")
+    # jac = load_file("gemma-2-9b-it-nonref_jac")
+
+
 
 
     X = nonref["X"]
@@ -403,13 +477,13 @@ def main():
     # print(X_nontox)
     X_contr = X - X_ref
 
-    X_contr_norm = X_contr / th.norm(X_contr)
-    prefix_sum = th.cumsum(X_contr_norm, dim=0)
-    shifted_refusal_dirs = X_contr_norm.roll(1, dims=0)
-    shifted_refusal_dirs[0] = X_contr_norm[0]
-    diff_from_first = X_contr_norm - shifted_refusal_dirs
+    # X_contr_norm = X_contr / th.norm(X_contr)
+    # prefix_sum = th.cumsum(X_contr_norm, dim=0)
+    # shifted_refusal_dirs = X_contr_norm.roll(1, dims=0)
+    # shifted_refusal_dirs[0] = X_contr_norm[0]
+    # diff_from_first = X_contr_norm - shifted_refusal_dirs
     
-    X_contr = 0.9*X_contr_norm + 0.01*prefix_sum + 0.01*diff_from_first
+    # X_contr = 0.9*X_contr_norm + 0.01*prefix_sum + 0.01*diff_from_first
     # a=2
     # X_contr = X - X_ref + a*(X_tox-X_nontox)
     # del X_tox
@@ -423,7 +497,7 @@ def main():
     del X_ref
     
     # l_list = [0.5, 0.75, 1, 1.25, 1.5]
-    l_list = [1.1]
+    l_list = [1]
 
     # q_list = [0.1, 1, 5]
     # r_list = [0.1, 1, 5, 10]
@@ -433,27 +507,25 @@ def main():
     # r_list = [10]
     # qf_list = [0.1]
 
-    q_list = [1]
+    q_list = [0.1]
     r_list = [1]
     qf_list = [0.1]
 
     # num_trials = 104
     num_trials = 104
-    output_filename = "gemma-2-9b-it-TEST"
-    run_trials_lfs(
+# def demo(model, tokenizer, prompt, A, X_contr, l_list=[1], q_list=[0.1], r_list=[10], qf_list=[0.1], k=50, do_sample=False, run_base=False, batch_size=32):
+    demo(
         model, 
         tokenizer, 
         formatted_harmful_prompts, 
-        num_trials, 
         A, 
         X_contr, 
         l_list, 
         q_list, 
         r_list, 
         qf_list,
-        k=100,
+        k=512,
         do_sample=True,
-        filename=output_filename,
     )
 
 # def run_trials_lfs(model, tokenizer, prompts, num_trials, A, X_contr, l_list=[1], q_list=[0.1], r_list=[10], qf_list=[0.1], k=50, do_sample=False, filename="json_out"):
