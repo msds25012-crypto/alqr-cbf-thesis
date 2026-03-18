@@ -61,8 +61,10 @@ class ImageLQRSteering:
         
         
         if preserve_mem:
-            self.K_sing = lqr.time_varying_lqr_noB(self.A_sing, self.Q_sing, self.R_sing, self.Qf_sing) if self.A_sing is not None else None
-            self.K_multi = lqr.time_varying_lqr_noB(self.A_multi, self.Q_multi, self.R_multi, self.Qf_multi) if self.A_multi is not None else None
+            # self.K_sing = lqr.time_varying_lqr_noB(self.A_sing, self.Q_sing, self.R_sing, self.Qf_sing).to(th.bfloat16) if self.A_sing is not None else None
+            # self.K_multi = lqr.time_varying_lqr_noB(self.A_multi, self.Q_multi, self.R_multi, self.Qf_multi).to(th.bfloat16) if self.A_multi is not None else None
+            self.K_sing = lqr.time_varying_lqr_noB_mem_efficient(self.A_sing, self.Q_sing, self.R_sing, self.Qf_sing).to(th.bfloat16) if self.A_sing is not None else None
+            self.K_multi = lqr.time_varying_lqr_noB_mem_efficient(self.A_multi, self.Q_multi, self.R_multi, self.Qf_multi).to(th.bfloat16) if self.A_multi is not None else None
             del self.A_sing
             del self.A_multi
             del self.Q_sing
@@ -96,54 +98,191 @@ class ImageLQRSteering:
     # def hook_setpoint_tracking(self, layer_idx, module, input, output):
     def hook_setpoint_tracking_multi(self, layer_idx, module, args, kwargs, output):
         # assume E_normed is unit vector in direction of contrastive feature
-        print(f"kwargs keys: {kwargs.keys()}")
-        print(f"kwargs: {kwargs}")
-        print(f"args: {args}")
-        x = kwargs["hidden_states"][...,-1,:]
-        # self.X[layer_idx] = x[-1,:]
+        # print(f"kwargs keys: {kwargs.keys()}")
+        # print(f"kwargs: {kwargs}")
+        # print(f"args: {args}")
+        # x = kwargs["hidden_states"][...,-1,:]
+        # # self.X[layer_idx] = x[-1,:]
 
+        # v = self.E_unit_multi[layer_idx]
+        
+        # # print(f"v: {v}")
+        
+        # # print(f"betas_multi dtype: {self.betas_multi[layer_idx].dtype}")
+        # # print(f"v dtype: {v.dtype}")
+        # # print(f"x dtype: {x.dtype}")
+        # alpha = th.tensor([self.betas_multi[layer_idx] for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
+        # # alpha = th.tensor([th.norm(x[i]) for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
+        # e = alpha.squeeze(0).T @ v.unsqueeze(0)
+        #     # print(f"e: {e}")
+        # u_t = th.bmm(self.K_multi[layer_idx].unsqueeze(0), th.transpose(e.unsqueeze(0),-2,-1)).squeeze(0).T
+        # # self.U[layer_idx] = u_t[-1]
+
+
+        # print(f"multi layer {layer_idx} u_t: {u_t}")
+        # if isinstance(output,tuple):
+        #     # output[1][...,-1,:] = output[1][...,-1,:] + u_t # TODO: verify that output[1] corresponds to image tokens (also applicable for data handling)
+        #     output[1][...,:] = output[1][...,:] + u_t # TODO: verify that output[1] corresponds to image tokens (also applicable for data handling)
+        # else: 
+        #     output[...,-1,:] = output[...,-1,:] + u_t
+        # # print(f"output: {output}")
+        # return output
+
+        x = kwargs["hidden_states"]
         v = self.E_unit_multi[layer_idx]
-        # print(f"v: {v}")
-        alpha = th.tensor([self.betas_multi[layer_idx] for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
-        # alpha = th.tensor([th.norm(x[i]) for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
-        e = alpha.squeeze(0).T @ v.unsqueeze(0)
-            # print(f"e: {e}")
-        u_t = th.bmm(self.K_multi[layer_idx].unsqueeze(0), th.transpose(e.unsqueeze(0),-2,-1)).squeeze(0).T
-        # self.U[layer_idx] = u_t[-1]
+
+        b_mat = self.betas_multi[layer_idx] * th.ones([x.shape[0], x.shape[1]], device=self.device,  dtype=th.bfloat16)
+        probe_mat = x @ v.T
+        alpha = b_mat - probe_mat
+        v_mat = v.expand(x.shape[0], x.shape[1], -1)
+        e = alpha.unsqueeze(-1) * v_mat
+        print(f"x multi shape: {x.shape}")
+        # print(f"vmat dtype: {v_mat.dtype}")
+        # print(f"e dtype: {e.dtype}")
+
+        u_t = e @ self.K_multi[layer_idx].T
 
 
+        print(f"multi layer {layer_idx} u_t: {u_t}")
         if isinstance(output,tuple):
-            output[1][...,-1,:] = output[1][...,-1,:] + u_t # TODO: verify that output[1] corresponds to image tokens (also applicable for data handling)
+            # output[1][...,-1,:] = output[1][...,-1,:] + u_t # TODO: verify that output[1] corresponds to image tokens (also applicable for data handling)
+            output[1][...,:] = output[1][...,:] + u_t # TODO: verify that output[1] corresponds to image tokens (also applicable for data handling)
         else: 
+            raise ValueError("yoimultinkeeee")
             output[...,-1,:] = output[...,-1,:] + u_t
+        # print(f"output: {output}")
+        return output
+    
+    def hook_setpoint_tracking_multi_text(self, layer_idx, module, args, kwargs, output):
 
+        x = kwargs["encoder_hidden_states"]
+        v = self.E_unit_multi[layer_idx]
+
+        b_mat = self.betas_multi[layer_idx] * th.ones([x.shape[0], x.shape[1]], device=self.device,  dtype=th.bfloat16)
+        probe_mat = x @ v.T
+        alpha = b_mat - probe_mat
+        v_mat = v.expand(x.shape[0], x.shape[1], -1)
+        e = alpha.unsqueeze(-1) * v_mat
+        print(f"x multi shape: {x.shape}")
+        # print(f"vmat dtype: {v_mat.dtype}")
+        # print(f"e dtype: {e.dtype}")
+
+        u_t = e @ self.K_multi[layer_idx].T
+
+
+        print(f"multi layer {layer_idx} u_t: {u_t}")
+        if isinstance(output,tuple):
+            # output[1][...,-1,:] = output[1][...,-1,:] + u_t # TODO: verify that output[1] corresponds to image tokens (also applicable for data handling)
+            output[0][...,:] = output[0][...,:] + u_t # TODO: verify that output[1] corresponds to image tokens (also applicable for data handling)
+        else: 
+            raise ValueError("yoimultinkeeee")
+            output[...,-1,:] = output[...,-1,:] + u_t
         # print(f"output: {output}")
         return output
     
         # def hook_setpoint_tracking(self, layer_idx, module, input, output):
     def hook_setpoint_tracking_sing(self, layer_idx, module, args, kwargs, output):
         # assume E_normed is unit vector in direction of contrastive feature
-        print(f"kwargs keys: {kwargs.keys()}")
+        # print(f"kwargs keys: {kwargs.keys()}")
         print(f"kwargs: {kwargs}")
         print(f"args: {args}")
-        x = kwargs["hidden_states"][...,-1,:]
+        x = kwargs["hidden_states"]#[...,-1,:]
         # self.X[layer_idx] = x[-1,:]
 
         v = self.E_unit_sing[layer_idx]
-        # print(f"v: {v}")
-        alpha = th.tensor([self.betas_sing[layer_idx] for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
-        # alpha = th.tensor([th.norm(x[i]) for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
-        e = alpha.squeeze(0).T @ v.unsqueeze(0)
-            # print(f"e: {e}")
-        u_t = th.bmm(self.K_sing[layer_idx].unsqueeze(0), th.transpose(e.unsqueeze(0),-2,-1)).squeeze(0).T
-        # self.U[layer_idx] = u_t[-1]
+        # # print(f"v: {v}")
+        # alpha = th.tensor([self.betas_sing[layer_idx] for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
+        # # alpha = th.tensor([th.norm(x[i]) for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
+        # e = alpha.squeeze(0).T @ v.unsqueeze(0)
+        #     # print(f"e: {e}")
+        # u_t = th.bmm(self.K_sing[layer_idx].unsqueeze(0), th.transpose(e.unsqueeze(0),-2,-1)).squeeze(0).T
+        # # self.U[layer_idx] = u_t[-1]
 
 
+        # print(f"sing layer {layer_idx} u_t: {u_t}")
+        # if isinstance(output,tuple):
+        #     print("here")
+        #     # output[1][...,-1,:] = output[1][...,-1,:] + u_t # TODO: verify that output[1] corresponds to image tokens (also applicable for data handling)
+        #     output[1][...,:] = output[1][...,:] + u_t # TODO: verify that output[1] corresponds to image tokens (also applicable for data handling)
+        # else: 
+        #     output[...,-1,:] = output[...,-1,:] + u_t
+
+        # # print(f"output: {output}")
+        # return output
+
+        b_mat = self.betas_sing[layer_idx] * th.ones([x.shape[0], x.shape[1]], device=self.device, dtype=th.bfloat16)
+        probe_mat = x @ v.T
+        alpha = b_mat - probe_mat
+        v_mat = v.expand(x.shape[0], x.shape[1], -1)
+        e = alpha.unsqueeze(-1) * v_mat
+
+        print(f"x shape; {x.shape}")
+        print(f"vmat shape; {v_mat.shape}")
+        print(f"e shape; {e.shape}")
+        print(f"K shape; {self.K_sing.shape}")
+
+        u_t = e @ self.K_sing[layer_idx].T
+
+        # print(f"multi layer {layer_idx} u_t: {u_t}")
         if isinstance(output,tuple):
-            output[1][...,-1,:] = output[1][...,-1,:] + u_t # TODO: verify that output[1] corresponds to image tokens (also applicable for data handling)
+            # output[1][...,-1,:] = output[1][...,-1,:] + u_t # TODO: verify that output[1] corresponds to image tokens (also applicable for data handling)
+            print(f"output shape: {output[1][...,-u_t.shape[1]:,:].shape}")
+            print(f"u shape: {u_t.shape}")
+            output[1][...,:] = output[1][...,-u_t.shape[1]:,:] + u_t # TODO: verify that output[1] corresponds to image tokens (also applicable for data handling)
         else: 
-            output[...,-1,:] = output[...,-1,:] + u_t
+            raise ValueError("yoinkeeee")
+            # output[...,-1,:] = output[...,-1,:] + u_t
+        # print(f"output: {output}")
+        return output
 
+    def hook_setpoint_tracking_sing_text(self, layer_idx, module, args, kwargs, output):
+        # assume E_normed is unit vector in direction of contrastive feature
+        # print(f"kwargs keys: {kwargs.keys()}")
+        x = kwargs["encoder_hidden_states"]#[...,-1,:]
+        # self.X[layer_idx] = x[-1,:]
+
+        v = self.E_unit_sing[layer_idx]
+        # # print(f"v: {v}")
+        # alpha = th.tensor([self.betas_sing[layer_idx] for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
+        # # alpha = th.tensor([th.norm(x[i]) for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
+        # e = alpha.squeeze(0).T @ v.unsqueeze(0)
+        #     # print(f"e: {e}")
+        # u_t = th.bmm(self.K_sing[layer_idx].unsqueeze(0), th.transpose(e.unsqueeze(0),-2,-1)).squeeze(0).T
+        # # self.U[layer_idx] = u_t[-1]
+
+
+        # print(f"sing layer {layer_idx} u_t: {u_t}")
+        # if isinstance(output,tuple):
+        #     print("here")
+        #     # output[1][...,-1,:] = output[1][...,-1,:] + u_t # TODO: verify that output[1] corresponds to image tokens (also applicable for data handling)
+        #     output[1][...,:] = output[1][...,:] + u_t # TODO: verify that output[1] corresponds to image tokens (also applicable for data handling)
+        # else: 
+        #     output[...,-1,:] = output[...,-1,:] + u_t
+
+        # # print(f"output: {output}")
+        # return output
+
+        b_mat = self.betas_sing[layer_idx] * th.ones([x.shape[0], x.shape[1]], device=self.device, dtype=th.bfloat16)
+        probe_mat = x @ v.T
+        alpha = b_mat - probe_mat
+        v_mat = v.expand(x.shape[0], x.shape[1], -1)
+        e = alpha.unsqueeze(-1) * v_mat
+
+        print(f"x shape; {x.shape}")
+        print(f"vmat shape; {v_mat.shape}")
+        print(f"e shape; {e.shape}")
+        print(f"K shape; {self.K_sing.shape}")
+
+        u_t = e @ self.K_sing[layer_idx].T
+
+        # print(f"multi layer {layer_idx} u_t: {u_t}")
+        if isinstance(output,tuple):
+            print(f"output shape: {output[0][...,-u_t.shape[1]:,:].shape}")
+            print(f"u shape: {u_t.shape}")
+            output[0][...,:] = output[0][...,-u_t.shape[1]:,:] + u_t # TODO: verify that output[1] corresponds to text tokens (also applicable for data handling)
+        else: 
+            raise ValueError("yoinkeeee")
+            # output[...,-1,:] = output[...,-1,:] + u_t
         # print(f"output: {output}")
         return output
 
@@ -160,28 +299,30 @@ class ImageLQRSteering:
             try:
                 
                 if self.steer_multi:
-                    for layer_idx, layer in enumerate(self.pipe.transformer.transformer_blocks):
+                    for layer_idx, layer in enumerate(self.pipe.transformer.transformer_blocks[3:]):
                         def hook_wrapper(layer_idx):
                             # def hook(module, input, output):
                                 # return self.hook_setpoint_tracking(layer_idx, module, input, output)
                             def hook(module, args, kwargs, output):
                                 return self.hook_setpoint_tracking_multi(layer_idx, module, args, kwargs, output)
+                                # return self.hook_setpoint_tracking_multi_text(layer_idx, module, args, kwargs, output)
 
 
                             return hook
 
                         handles.append(
                             layer.register_forward_hook(
-                                hook_wrapper(layer_idx), with_kwargs=True
+                                hook_wrapper(layer_idx+3), with_kwargs=True
                             )
                         )
                 if self.steer_single:
-                    for layer_idx, layer in enumerate(self.pipe.transformer.single_transformer_blocks):
+                    for layer_idx, layer in enumerate(self.pipe.transformer.single_transformer_blocks[:4]):
                         def hook_wrapper(layer_idx):
                             # def hook(module, input, output):
                             #     return self.hook_setpoint_tracking(layer_idx, module, input, output)
                             def hook(module, args, kwargs, output):
                                 return self.hook_setpoint_tracking_sing(layer_idx, module, args, kwargs, output)
+                                # return self.hook_setpoint_tracking_sing_text(layer_idx, module, args, kwargs, output)
 
 
                             return hook
@@ -204,10 +345,12 @@ class ImageLQRSteering:
         self.steer_multi = steer_multi
         self.steer_single = steer_single
 
-        self.E_unit_sing = th.zeros_like(self.E_sing)
-        self.E_unit_multi = th.zeros_like(self.E_multi)
-        self.betas_sing = [0 for i in range(self.T_single)]
-        self.betas_multi = [0 for i in range(self.T_multi)]
+        # print(f"num multi layers: {self.pipe.transformer.transformer_blocks}")
+
+        self.E_unit_sing = th.zeros_like(self.E_sing, dtype=th.bfloat16)
+        self.E_unit_multi = th.zeros_like(self.E_multi, dtype=th.bfloat16)
+        self.betas_sing = [0 for i in range(self.T_single+1)]
+        self.betas_multi = [0 for i in range(self.T_multi+1)]
         for i, e in enumerate(self.E_multi):
             # print(f"e in setpoint: {e}")
             nrm = th.linalg.norm(e)
@@ -216,7 +359,7 @@ class ImageLQRSteering:
                 self.E_unit_multi[i] = self.E_unit_multi[i]*0
             else:
                 self.E_unit_multi[i] = e / nrm
-                self.betas_multi[i] = lmbda * nrm
+                self.betas_multi[i] = (lmbda * nrm).to(th.float64).to(th.bfloat16)
 
         for i, e in enumerate(self.E_sing):
             # print(f"e in setpoint: {e}")
@@ -226,7 +369,7 @@ class ImageLQRSteering:
                 self.E_unit_sing[i] = self.E_unit_sing[i]*0
             else:
                 self.E_unit_sing[i] = e / nrm
-                self.betas_sing[i] = lmbda * nrm
+                self.betas_sing[i] = (lmbda * nrm).to(th.bfloat16)
 
 
         with self.add_hooks():

@@ -54,6 +54,8 @@ class ImageContrastiveBuilder:
         self.image_seq_len = 2
         self.num_inference_steps = num_inference_steps
 
+        self.token_idx = -70
+
 
     # def hook_collector_multi(self, layer_idx, module, input, output):
     # # print(f"outie: {len(output)}")
@@ -75,12 +77,12 @@ class ImageContrastiveBuilder:
     # print(f"outie: {len(output)}")
     # print(output[0].shape)
     # print(output[1].shape)
-        self.X_text_multi[layer_idx][..., 0,:] = kwargs["encoder_hidden_states"][...,-1,:]
-        self.X_img_multi[layer_idx][..., 0,:] = kwargs["hidden_states"][...,-1,:]
+        self.X_text_multi[layer_idx][..., 0,:] = kwargs["encoder_hidden_states"][...,self.token_idx,:]
+        self.X_img_multi[layer_idx][..., 0,:] = kwargs["hidden_states"][...,self.token_idx,:]
         
         if layer_idx == self.T_multi-1:
-            self.X_text_multi[self.T_multi][..., 0,:] = output[0][-1][-1]
-            self.X_img_multi[self.T_multi][..., 0,:] = output[1][-1][-1]
+            self.X_text_multi[self.T_multi][..., 0,:] = output[0][-1][self.token_idx]
+            self.X_img_multi[self.T_multi][..., 0,:] = output[1][-1][self.token_idx]
         return output
 
     def hook_collector_single(self, layer_idx, module, args, kwargs, output):
@@ -90,12 +92,12 @@ class ImageContrastiveBuilder:
         # self.X_text_sing[layer_idx][..., 0,:] = output[0][-1][-1]
         # self.X_img_sing[layer_idx][..., 0,:] = output[1][-1][-1]
 
-        self.X_text_sing[layer_idx][..., 0,:] = kwargs["encoder_hidden_states"][...,-1,:]
-        self.X_img_sing[layer_idx][..., 0,:] = kwargs["hidden_states"][...,-1,:]
+        self.X_text_sing[layer_idx][..., 0,:] = kwargs["encoder_hidden_states"][...,self.token_idx,:]
+        self.X_img_sing[layer_idx][..., 0,:] = kwargs["hidden_states"][...,self.token_idx,:]
         
         if layer_idx == self.T_single-1:
-            self.X_text_sing[self.T_single][..., 0,:] = output[0][-1][-1]
-            self.X_img_sing[self.T_single][..., 0,:] = output[1][-1][-1]
+            self.X_text_sing[self.T_single][..., 0,:] = output[0][-1][self.token_idx]
+            self.X_img_sing[self.T_single][..., 0,:] = output[1][-1][self.token_idx]
         return output
     
 
@@ -141,7 +143,7 @@ class ImageContrastiveBuilder:
                     # def hook(module, input, output):
                     #     return self.hook_collector_single(layer_idx, module, input, output)
                     def hook(module, args, kwargs, output):
-                        return self.hook_collector_multi(layer_idx, module, args, kwargs, output)
+                        return self.hook_collector_single(layer_idx, module, args, kwargs, output)
 
                     return hook
 
@@ -185,6 +187,7 @@ class ImageContrastiveBuilder:
 
             def f_last(x):
                 xout = tfs[t](x)[1][..., -1, :]
+                print(xout)
                 return xout.squeeze()
             # Compute Jacobians:
             Jx = torch.autograd.functional.jacobian(lambda x_: f_last(x_), x, create_graph=False, vectorize=True)   # shape: [n, *x.shape]

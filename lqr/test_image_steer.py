@@ -33,6 +33,7 @@ bfl_repo = "black-forest-labs/FLUX.1-schnell"
 text_encoder_2 = T5EncoderModel.from_pretrained(
     bfl_repo,
     subfolder="text_encoder_2",
+    load_in_4bit=True,
     torch_dtype=torch.bfloat16,
 )
 pipe = FluxPipeline.from_pretrained(
@@ -42,6 +43,7 @@ pipe = FluxPipeline.from_pretrained(
     force_download=False,
     quantization_config=pipeline_quant_config,
 ).to(device)
+# pipe.enable_model_cpu_offload() #save some VRAM by offloading the model to CPU. Remove this if you have enough GPU power
 
 filename = "cyberpunk"
 style = load_file(filename)
@@ -54,6 +56,8 @@ jac = load_file(filename)
 
 X_contr_multi = style["X_multi"] - plain["X_multi"] 
 X_contr_sing = style["X_sing"] - plain["X_sing"] 
+del style
+del plain
 
 A_sing = jac["A_sing"]
 A_multi = jac["A_multi"]
@@ -70,6 +74,7 @@ steerer = ImageLQRSteering(
     multi_contrastive_vecs=X_contr_multi
 )
 
-steered_img = steerer.track_setpoint(["hey man"], steer_multi=True, steer_single=True, lmbda=1, do_sample=False, temp=1)
+l=1
+steered_img = steerer.track_setpoint(["A cat resting on a laptop keyboard in a bedroom"], steer_multi=True, steer_single=True, lmbda=l, do_sample=False, temp=1)
 
-steered_img.save("images/steered_test.png")
+steered_img.save(f"images/steered_testl{l}fewer.png")
