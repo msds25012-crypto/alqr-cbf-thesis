@@ -53,8 +53,7 @@ class ImageContrastiveBuilder:
         # image_seq_len = X.shape[1] # TODO
         self.image_seq_len = 2
         self.num_inference_steps = num_inference_steps
-
-        self.token_idx = -70
+        self.token_idx = -1
 
 
     # def hook_collector_multi(self, layer_idx, module, input, output):
@@ -100,6 +99,35 @@ class ImageContrastiveBuilder:
             self.X_img_sing[self.T_single][..., 0,:] = output[1][-1][self.token_idx]
         return output
     
+
+    def hook_collector_multi_img_all(self, layer_idx, module, args, kwargs, output):
+
+        print("in multi all")
+        print(kwargs["hidden_states"].shape)
+        self.X_img_multi[layer_idx][..., :,:] = kwargs["hidden_states"][...,:,:]
+        print("inbetween from multi all")
+        
+        if layer_idx == self.T_multi-1:
+            self.X_img_multi[self.T_multi][..., :,:] = output[1][-1][:]
+        print("returning from multi all")
+        return output
+
+    def hook_collector_single_img_all(self, layer_idx, module, args, kwargs, output):
+        # print(f"outie: {len(output)}")
+        # print(output[0].shape)
+        # print(output[1].shape)
+        # self.X_text_sing[layer_idx][..., 0,:] = output[0][-1][-1]
+        # self.X_img_sing[layer_idx][..., 0,:] = output[1][-1][-1]
+
+        print("in sing all")
+        print(kwargs["hidden_states"].shape)
+        self.X_img_sing[layer_idx][..., :,:] = kwargs["hidden_states"][...,:,:]
+        print("inbetween from sing all")
+        
+        if layer_idx == self.T_single-1:
+            self.X_img_sing[self.T_single][..., :,:] = output[1][-1][:]
+        print("returning from sing all")
+        return output
 
 
     @contextmanager
@@ -161,6 +189,65 @@ class ImageContrastiveBuilder:
             for h in handles:
                 h.remove()
 
+    @contextmanager
+    def add_hooks_img_all(
+            self
+        ):
+        """Context manager for temporarily adding forward hooks.
+
+        Args:
+            module_forward_pre_hooks: List of (module, hook_fn) tuples for pre-hooks
+            module_forward_hooks: List of (module, hook_fn) tuples for forward hooks
+            **kwargs: Additional keyword arguments passed to hook functions
+
+        Yields:
+            None. Hooks are active within the context, removed on exit.
+        """
+        # module_forward_pre_hooks = module_forward_pre_hooks or []
+        # module_forward_hooks = module_forward_hooks or []
+        handles = []
+        try:
+
+            for layer_idx, layer in enumerate(self.pipe.transformer.transformer_blocks):
+                def hook_wrapper(layer_idx):
+                    # def hook(module, input, output):
+                    #     return self.hook_collector_multi(layer_idx, module, input, output)
+
+                    def hook(module, args, kwargs, output):
+                        return self.hook_collector_multi_img_all(layer_idx, module, args, kwargs, output)
+
+
+                    return hook
+
+                handles.append(
+                    layer.register_forward_hook(
+                        hook_wrapper(layer_idx), with_kwargs=True
+                        # hook_wrapper(layer_idx)
+                    )
+                )
+            for layer_idx, layer in enumerate(self.pipe.transformer.single_transformer_blocks):
+                def hook_wrapper(layer_idx):
+                    # def hook(module, input, output):
+                    #     return self.hook_collector_single(layer_idx, module, input, output)
+                    def hook(module, args, kwargs, output):
+                        return self.hook_collector_single_img_all(layer_idx, module, args, kwargs, output)
+
+                    return hook
+
+                handles.append(
+                    layer.register_forward_hook(
+                        hook_wrapper(layer_idx), with_kwargs=True
+                        # hook_wrapper(layer_idx)
+                    )
+                )
+            # for module, hook in module_forward_hooks:
+                # partial_hook = functools.partial(hook, **kwargs)
+                # handles.append(module.register_forward_hook(partial_hook))
+            yield
+        finally:
+            for h in handles:
+                h.remove()
+
 
     def linearize(self, tfs, X_nom):
         """
@@ -201,6 +288,10 @@ class ImageContrastiveBuilder:
 
     def flux_block_wrapper(self, block, encoder_hidden_states, temb, x):
         return block(hidden_states=x, encoder_hidden_states=encoder_hidden_states, temb=temb)
+
+
+    def flux_block_wrapper_txt(self, block, hidden_states, temb, x):
+        return block(hidden_states=hidden_states, encoder_hidden_states=x, temb=temb)
 
 
     def retrieve_timesteps(
@@ -334,16 +425,77 @@ class ImageContrastiveBuilder:
 
         tensor_dict = {
             "X_multi": X_sum_img_multi / len(samples),
-            # "X_txt_multi": X_sum_txt_multi / len(samples),
+            "X_txt_multi": X_sum_txt_multi / len(samples),
             "X_sing": X_sum_img_sing / len(samples),
-            # "X_txt_sing": X_sum_txt_sing / len(samples),
+            "X_txt_sing": X_sum_txt_sing / len(samples),
+        } 
+        with open(PICKLE_JAR + filename + ".pkl", "wb") as f:
+            pickle.dump(tensor_dict, f)
+        
+        
+    def collect_all_image_batch(self, prompts, num_samples, filename, num_tokens=1, batch_size=50):
+        image_seq_len = self.pipe.scheduler.config.get("max_image_seq_len", 4096)
+        mu = self.calculate_shift(
+            self.image_seq_len,
+            self.pipe.scheduler.config.get("base_image_seq_len", 256),
+            self.pipe.scheduler.config.get("max_image_seq_len", 4096),
+            self.pipe.scheduler.config.get("base_shift", 0.5),
+            self.pipe.scheduler.config.get("max_shift", 1.15),
+        )
+        timesteps, self.num_inference_steps = self.retrieve_timesteps(
+            self.pipe.scheduler,
+            self.num_inference_steps,
+            self.device,
+            sigmas=self.sigmas,
+            mu=mu,
+        )
+
+        X_sum_img_multi = torch.zeros((self.T_multi+1, image_seq_len, self.n,)).to(self.device)
+        X_sum_img_sing = torch.zeros((self.T_single+1, image_seq_len, self.n,)).to(self.device)
+
+        print(f"X sum shape: {X_sum_img_multi.shape}")
+
+        samples = random.sample(prompts, num_samples)
+        for i in range(0,len(samples), batch_size):
+            sample = samples[i:i+batch_size]
+            self.B = len(sample)
+
+            self.X_img_sing = torch.zeros((self.T_single+1, self.B, image_seq_len, self.n), device=self.device)
+            self.X_img_multi = torch.zeros((self.T_multi+1, self.B, image_seq_len, self.n), device=self.device)
+
+
+            with self.add_hooks_img_all():
+                image = self.pipe(
+                    sample,
+                    guidance_scale=0.0,
+                    num_inference_steps=self.num_inference_steps,
+                    max_sequence_length=256,
+                    generator=torch.Generator(self.device).manual_seed(0)
+                ).images[0]
+
+            print(self.X_img_multi.shape)
+            # print(torch.sum(self.X_img_multi, dim=1).shape)
+            print(X_sum_img_multi.shape)
+            X_sum_img_multi += torch.sum(self.X_img_multi, dim=1)
+            X_sum_img_sing += torch.sum(self.X_img_sing, dim=1)
+
+            # X_mean = th.mean(self.X[:,:,-1,:], dim = 1)
+
+        total = num_samples*num_tokens
+        print(f"total: {total}")
+        print(f"X_multi shape: {X_sum_img_multi.shape}")
+        print(f"X_sing shape: {X_sum_img_sing.shape}")
+
+        tensor_dict = {
+            "X_multi": X_sum_img_multi / len(samples),
+            "X_sing": X_sum_img_sing / len(samples),
         } 
         with open(PICKLE_JAR + filename + ".pkl", "wb") as f:
             pickle.dump(tensor_dict, f)
         
 
     
-    def collect_jacobians(self, prompts, num_samples, filename, num_tokens=1, max_ctx=512): # 24 works for llama 8-9b
+    def collect_jacobians(self, prompts, num_samples, filename, num_tokens=1, max_ctx=512, collect_txt=True, collect_img=False): # 24 works for llama 8-9b
         mu = self.calculate_shift(
             self.image_seq_len,
             self.pipe.scheduler.config.get("base_image_seq_len", 256),
@@ -367,9 +519,12 @@ class ImageContrastiveBuilder:
         iter = 1
 
 
-        A_sing_sum = torch.zeros((self.T_single, self.n, self.n,))#.to(self.device)
-        A_multi_sum = torch.zeros((self.T_multi, self.n, self.n,))#.to(self.device)
-
+        if collect_img:
+            A_sing_sum = torch.zeros((self.T_single, self.n, self.n,))#.to(self.device)
+            A_multi_sum = torch.zeros((self.T_multi, self.n, self.n,))#.to(self.device)
+        if collect_txt:
+            A_sing_sum_txt = torch.zeros((self.T_single, self.n, self.n,))#.to(self.device)
+            A_multi_sum_txt = torch.zeros((self.T_multi, self.n, self.n,))#.to(self.device)
 
         for prompt in samples:
             print(f"iter: {iter}")
@@ -403,34 +558,64 @@ class ImageContrastiveBuilder:
             
             # self.X_sum = self.X_sum + self.X[:,-1,:]
 
-            wrapper_list = []
-            for i, tf in enumerate(self.pipe.transformer.transformer_blocks):
-                wrapper_list.append(partial(self.flux_block_wrapper, tf, self.X_text_multi[i], temb))
+            if collect_img:
+                wrapper_list = []
+                for i, tf in enumerate(self.pipe.transformer.transformer_blocks):
+                    wrapper_list.append(partial(self.flux_block_wrapper, tf, self.X_img_multi[i], temb))
 
-            wrapper_list2 = []
-            for i, tf in enumerate(self.pipe.transformer.single_transformer_blocks):
-                wrapper_list2.append(partial(self.flux_block_wrapper, tf, self.X_text_sing[i], temb))
-
-
-            # wrapper_list = [partial(flux_block_wrapper, tf, encoder_hidden_states, temb) for tf in pipe.transformer.transformer_blocks]
-
-            A_multi = self.linearize(wrapper_list, self.X_img_multi)
-            print(f"A multi shape: {A_multi.shape}")
-            A_multi_sum += A_multi
-            print(f"A_multi_sum shape: {A_multi_sum.shape}")
+                wrapper_list2 = []
+                for i, tf in enumerate(self.pipe.transformer.single_transformer_blocks):
+                    wrapper_list2.append(partial(self.flux_block_wrapper, tf, self.X_img_sing[i], temb))
 
 
-            A_sing = self.linearize(wrapper_list2, self.X_img_sing)
-            print(f"A sing shape: {A_sing.shape}")
-            A_sing_sum += A_sing
-            print(f"A_sing_sum shape: {A_sing_sum.shape}")
+                # wrapper_list = [partial(flux_block_wrapper, tf, encoder_hidden_states, temb) for tf in pipe.transformer.transformer_blocks]
+
+                A_multi = self.linearize(wrapper_list, self.X_img_multi)
+                print(f"A multi shape: {A_multi.shape}")
+                A_multi_sum += A_multi
+                print(f"A_multi_sum shape: {A_multi_sum.shape}")
+
+
+                A_sing = self.linearize(wrapper_list2, self.X_img_sing)
+                print(f"A sing shape: {A_sing.shape}")
+                A_sing_sum += A_sing
+                print(f"A_sing_sum shape: {A_sing_sum.shape}")
+
+            if collect_txt:
+                wrapper_list = []
+                for i, tf in enumerate(self.pipe.transformer.transformer_blocks):
+                    wrapper_list.append(partial(self.flux_block_wrapper_txt, tf, self.X_img_multi[i], temb))
+
+                wrapper_list2 = []
+                for i, tf in enumerate(self.pipe.transformer.single_transformer_blocks):
+                    wrapper_list2.append(partial(self.flux_block_wrapper_txt, tf, self.X_img_sing[i], temb))
+
+
+                # wrapper_list = [partial(flux_block_wrapper, tf, encoder_hidden_states, temb) for tf in pipe.transformer.transformer_blocks]
+
+                A_multi = self.linearize(wrapper_list, self.X_text_multi)
+                print(f"A multi shape: {A_multi.shape}")
+                A_multi_sum_txt += A_multi
+                print(f"A_multi_sum_txt shape: {A_multi_sum_txt.shape}")
+
+
+                A_sing = self.linearize(wrapper_list2, self.X_text_sing)
+                print(f"A sing shape: {A_sing.shape}")
+                A_sing_sum_txt += A_sing
+                print(f"A_sing_sum_txt shape: {A_sing_sum_txt.shape}")
+            
 
 
         total = len(samples)
-        tensor_dict = {
-            "A_multi": A_multi_sum / total,
-            "A_sing": A_sing_sum / total,
-        } 
+
+        tensor_dict = {}
+
+        if collect_img:
+            tensor_dict["A_img_multi"] = A_multi_sum / total,
+            tensor_dict["A_img_sing"] = A_sing_sum / total,
+        if collect_txt:
+            tensor_dict["A_txt_multi"] = A_multi_sum_txt / total
+            tensor_dict["A_txt_sing"] = A_sing_sum_txt / total
 
         with open(PICKLE_JAR + filename + ".pkl", "wb") as f:
             pickle.dump(tensor_dict, f)
