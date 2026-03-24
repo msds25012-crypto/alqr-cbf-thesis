@@ -10,6 +10,8 @@ import pickle
 import time
 from steering import Mode
 import yaml
+from timeit import default_timer as timer
+import gc
 
 with open('config/config.yaml', 'r') as f:
     config_data = yaml.safe_load(f)
@@ -399,9 +401,13 @@ class ContrastiveBuilder:
         self.A_sum = th.zeros((self.T, self.n, self.n,)).to(self.device)
 
         sample = random.sample(prompts, num_samples)
+
+        collection_times = []
+
         iter = 1
         for prompt in sample:
             print(f"iter: {iter}")
+            start = timer()
             iter += 1
             inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=max_ctx).to(self.device)
 
@@ -444,12 +450,44 @@ class ContrastiveBuilder:
             del self.X
             self.X = None
 
+            th.cuda.synchronize()
+            end = timer()
+
+            rt = end - start
+            
+            print(f"loop runtime: {rt}")
+            collection_times.append(rt)
+            gc.collect()
+            if th.cuda.is_available():
+                device_id = th.cuda.current_device()
+
+                # Print allocated memory (currently used by tensors)
+                print(f"th.cuda.memory_allocated: {th.cuda.memory_allocated(device_id)/1024**3:.3f}GB")
+                
+                # Print reserved memory (allocated by PyTorch's internal memory manager, including cached free blocks)
+                print(f"th.cuda.memory_reserved: {th.cuda.memory_reserved(device_id)/1024**3:.3f}GB")
+                
+                # Print peak memory usage during the current process lifetime
+                print(f"th.cuda.max_memory_reserved: {th.cuda.max_memory_reserved(device_id)/1024**3:.3f}GB")
+
+                # Optional: Clear the memory cache (can make `nvidia-smi` report lower usage, but doesn't affect PyTorch's ability to allocate new tensors)
+                th.cuda.empty_cache() 
+            else:
+                print("CUDA not available")
+
 
         total = num_samples*num_tokens
         print(f"total: {total}")
         tensor_dict = {
             "A": self.A_sum / total,
         } 
+
+        print("========================= Collection Times =========================")
+        times_th = th.tensor(collection_times)
+        print(f"th mean: {th.mean(times_th)}, std: {th.std(times_th)}")
+        print("===============================================================")
+
+
 
         with open(PICKLE_JAR + filename + ".pkl", "wb") as f:
             pickle.dump(tensor_dict, f)
