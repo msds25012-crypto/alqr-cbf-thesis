@@ -26,6 +26,10 @@ print(wordnet.synsets("game")[0].definition())
 
 wordnet_definitions = {}
 system_answers = ["Yes", "No"]
+concepts = ["football","circus","balloon","dog","church"]
+for c in concepts:
+    wordnet_definitions[c] = wordnet.synsets(c)[0].definition()
+
 
 def build_prompt(concept):
     if concept not in wordnet_definitions:
@@ -193,49 +197,14 @@ def evaluate(data_path, concept) -> None:
     answers_token_ids = [tokenizer.encode(a)[0] for a in system_answers]
     print(f"Answer tokens: {answers_token_ids}")
 
-    # Trying , and ; as delimiters.
-    # df = read_csv(cfg.data_path)
-    # df2 = read_csv(cfg.data_path2) if cfg.data_path2 is not None else df
-
-    # # Get sentences (and prompts) from data df.
-    # if cfg.col_sentence2 is None and cfg.col_prompt is None:
-    #     mode = "sentence"
-    # if cfg.col_sentence2 is None and cfg.col_prompt is not None:
-    #     mode = "sentence_prompt"
-    # if cfg.col_sentence2 is not None and cfg.col_prompt is None:
-    #     mode = "2sentences"
-    # if cfg.col_sentence2 is not None and cfg.col_prompt is not None:
-    #     mode = "2sentences_prompt"
     mode = "sentence"
-    # data = get_responses(data_path)
-
-    # df = pd.read_json(data_path)
     df = read_csv(data_path)
     print(df)
 
     l = 2
 
-    # sentences = df.loc[df["lambda"] == l, "steered"].tolist()
     sentences = df.loc[:,"steered"].tolist()
-    # sentences = data[0]["steered"].to_numpy()
-    # sentences = data[2]["steered"]
-    # for sweep in data:
-    #     unsteered = sweep["unsteered"].to_numpy()
-    #     steered = sweep["steered"].to_numpy()
-
-
-    # sentences = df[cfg.col_sentence1].to_numpy()
     sentences2, prompts = None, None
-    # if "prompt" in mode:
-    #     prompts = df[cfg.col_prompt].to_numpy()
-    # if "2sentences" in mode:
-    #     sentences2 = df2[cfg.col_sentence2].to_numpy()
-
-    # Remove strange characters appearing
-    # fixme: Why do we get these <s>?
-    # sentences = [s.replace("<s>", "") for s in sentences]
-    # if sentences2 is not None:
-    #     sentences2 = [s.replace("<s>", "") for s in sentences2]
 
     answers_str = ", ".join(system_answers)
 
@@ -349,7 +318,7 @@ def evaluate(data_path, concept) -> None:
     with pd.option_context(
         "display.max_rows", None, "display.max_columns", None, "display.width", None
     ):
-        output_path = "./concepts/"
+        output_path = data_path
         if output_path is not None:
             filename = Path(output_path) / "0_vague_shot_eval.csv"
             results_final.to_csv(filename)

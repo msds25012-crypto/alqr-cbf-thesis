@@ -13,6 +13,7 @@ import tqa_data_script as utils
 import json
 import csv
 import yaml
+import os
 
 with open('config/config.yaml', 'r') as f:
     config_data = yaml.safe_load(f)
@@ -76,7 +77,9 @@ def run_trials(model, tokenizer, num_trials, A, X_contr, l_list=[1], q_list=[0.1
             output_str.extend(output)
             postbase_time = time.perf_counter()
 
-    print(output_str)
+    # print(output_str)
+
+    print(f"A shape: {A.shape}")
 
     data_list = []
     for q in q_list:
@@ -114,7 +117,7 @@ def run_trials(model, tokenizer, num_trials, A, X_contr, l_list=[1], q_list=[0.1
     # with open(file_path, 'w') as file:
     #     json.dump(data_list, file, indent=4)
     file_path = "concepts/" + filename + ".csv"
-
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
     with open(file_path, mode="w", newline="", encoding="utf-8") as file:
         fieldnames = ["lambda", "steered", "unsteered"]
         writer = csv.DictWriter(file, fieldnames=fieldnames)

@@ -94,42 +94,46 @@ def get_target_and_other_sentences(csv_path, target):
     return sentences, other_sentences
 
 def main():
-    # model_name = "google/gemma-2-2b"
+    model_name = "google/gemma-2-2b"
     # model_name = "meta-llama/Meta-Llama-3-8B"
     # model_name = "google/gemma-2-9b"
     # model_name = "meta-llama/Llama-3.1-8B-Instruct"
     # model_name = "meta-llama/Llama-3.2-1B"
-    model_name = "Qwen/Qwen2.5-3B"
+    # model_name = "Qwen/Qwen2.5-3B"
 
     concepts = [
         "football",
-        "circus",
-        "church",
-        "dog",
-        "balloon"
+        # "circus",
+        # "church",
+        # "dog",
+        # "balloon"
     ]
-
-    sen, other = get_target_and_other_sentences('concepts/filtered_sentences.csv', "balloon")
-
-    for i in range(10):
-        print(sen[i])
-        print(f"other: {other[i]}\n")
 
     model, tokenizer = load_model(model_name, quant=True)
 
     dataguy = ContrastiveBuilder(model, tokenizer)
-    
-    filename = "Qwen2.5-3B-balloon"
-    dataguy.collect_data_batch(sen, 200, filename)
-    print("done with dtox")
 
-    filename = "Qwen2.5-3B-nonballoon"
-    dataguy.collect_data_batch(other, 200, filename)
-    print("done with ", filename)
+    for concept in concepts:
+        print(f"running {concept}")
+        sen, other = get_target_and_other_sentences('concepts/filtered_sentences.csv', concept)
 
-    filename = "Qwen2.5-3B-balloon,jac"
-    dataguy.collect_jacobians(sen, 50, filename)
-    print("done with jac")
+        for i in range(10):
+            print(sen[i])
+            print(f"other: {other[i]}\n")
+
+        
+        
+        filename = "gemma-2-2b-" + concept
+        dataguy.collect_data_batch(sen, 200, filename)
+        print("done with pro")
+
+        filename = "gemma-2-2b-non" + concept
+        dataguy.collect_data_batch(other, 200, filename)
+        print("done with neg", filename)
+
+        # filename = "gemma-2-2b-" + concept + "_jac"
+        # dataguy.collect_jacobians(sen, 25, filename)
+        # print("done with jac")
 
 if __name__ == "__main__":
     print(f"device: {device}")
