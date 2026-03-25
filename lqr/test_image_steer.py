@@ -45,7 +45,7 @@ pipe = FluxPipeline.from_pretrained(
     quantization_config=pipeline_quant_config,
 ).to(device)
 
-filename = "cyberpunk_all"
+filename = "cartoons_all"
 style = load_file(filename)
 
 filename = "plain_all"
@@ -111,116 +111,36 @@ steerer = ImageLQRSteering(
 
 
 
-# multi_inds = range(0, len(pipe.transformer.transformer_blocks), 5)
-# sing_inds = range(0, len(pipe.transformer.single_transformer_blocks), 5)
+multi_inds = range(0, len(pipe.transformer.transformer_blocks), 5)
+sing_inds = range(0, len(pipe.transformer.single_transformer_blocks), 5)
 
 
-# images = []
-# labels = []
-
-# for p in range(5):
-#     combSing = list(combinations(multi_inds, p))
-#     combMulti = list(combinations(sing_inds, p))
-
-#     # Iterate over all pairs of p-combinations
-#     for sing_list, multi_list in product(combSing, combMulti):
-#         steered_img = steerer.addddddderoolllllllolllllllllllll(["A cat resting on a laptop keyboard in a bedroom"], steer_multi=True, steer_single=True, multi_list=multi_list, sing_list=sing_list, do_sample=False, temp=1)
-
-#         # steered_img.save(f"images/test.png")
-#         images.append(steered_img)
-#         label = f"sing:{sing_list} multi:{multi_list}"
-#         labels.append(label)
-
-
-# chunk_size = 8   # number of images per output file
-# cols = 4         # grid width per chunk
-
-# tile_width, tile_height = images[0].size
-# caption_height = 20
-
-# for chunk_idx in range(0, len(images), chunk_size):
-#     chunk_imgs = images[chunk_idx:chunk_idx + chunk_size]
-#     chunk_labels = labels[chunk_idx:chunk_idx + chunk_size]
-
-#     rows = (len(chunk_imgs) + cols - 1) // cols
-
-#     tiled_img = Image.new(
-#         'RGB',
-#         (cols * tile_width, rows * (tile_height + caption_height)),
-#         color=(255, 255, 255)
-#     )
-
-#     draw = ImageDraw.Draw(tiled_img)
-
-#     for idx, (img, label) in enumerate(zip(chunk_imgs, chunk_labels)):
-#         x = (idx % cols) * tile_width
-#         y = (idx // cols) * (tile_height + caption_height)
-
-#         tiled_img.paste(img, (x, y))
-
-#         text_x = x + 5
-#         text_y = y + tile_height + 2
-#         draw.text((text_x, text_y), label, fill=(0, 0, 0))
-
-#     # Save each chunk with index in filename
-#     file_idx = chunk_idx // chunk_size
-#     tiled_img.save(f"images/test_{file_idx}.png")
-
-# cols = 4
-# rows = (len(images) + cols - 1) // cols
-
-# tile_width, tile_height = images[0].size
-# caption_height = 20  # height for label area below each image
-
-# # Create a blank image for the grid
-# tiled_img = Image.new(
-#     'RGB',
-#     (cols * tile_width, rows * (tile_height + caption_height)),
-#     color=(255, 255, 255)
-# )
-
-# draw = ImageDraw.Draw(tiled_img)
-
-# for idx, (img, label) in enumerate(zip(images, labels)):
-#     x = (idx % cols) * tile_width
-#     y = (idx // cols) * (tile_height + caption_height)
-#     tiled_img.paste(img, (x, y))
-#     # Draw label below image
-#     text_x = x + 5
-#     text_y = y + tile_height + 2
-#     draw.text((text_x, text_y), label, fill=(0, 0, 0))
-
-# multi_list = multi_inds
-multi_list = [0, 5, 20]
-# sing_list = sing_inds[:15]
-sing_list = [0, 5, 15]
-# # "A cat resting on a laptop keyboard in a bedroom"
-# # "A view out of a penthouse window overlooking a city"
-# steered_img = steerer.track_setpoint_all_patches(["A man in a busy city block."], steer_multi=True, steer_single=True, lmbda=1, do_sample=False, temp=1)
-
-
-sing_scales = [0.03, 0.04, 0.05, 0.06, 0.07]
-multi_scales = [0.02, 0.025, 0.03]
 images = []
 labels = []
-for sing_scale, multi_scale in product(sing_scales, multi_scales):
-    # steered_img = steerer.addddddderoolllllllolllllllllllll(["A cat resting on a laptop keyboard in a bedroom"], steer_multi=True, steer_single=True, multi_list=multi_list, sing_list=sing_list, do_sample=False, temp=1)
-    steered_img = steerer.addddddderoolllllllolllllllllllll(
-        ["a sandwich on a balcony overlooking a city"], 
-        steer_multi=True, 
-        steer_single=True, 
-        multi_list=multi_list, 
-        sing_list=sing_list, 
-        multi_scale=multi_scale, 
-        sing_scale=sing_scale,
-        do_sample=False, 
-        temp=1
-    )
 
-    # steered_img.save(f"images/test.png")
-    images.append(steered_img)
-    label = f"multi scale:{multi_scale} : sing scale:{sing_scale} "
-    labels.append(label)
+for p in range(5):
+    combSing = list(combinations(multi_inds, p))
+    combMulti = list(combinations(sing_inds, p))
+
+    # Iterate over all pairs of p-combinations
+    for sing_list, multi_list in product(combSing, combMulti):
+        steered_img = steerer.addddddderoolllllllolllllllllllll(
+            ["A cat resting on a laptop keyboard in a bedroom"], 
+            steer_multi=True, 
+            steer_single=True, 
+            multi_list=multi_list, 
+            sing_list=sing_list, 
+            multi_scale=0.02, 
+            sing_scale=0.02,
+            do_sample=False, 
+            temp=1
+        )
+
+        # steered_img.save(f"images/test.png")
+        images.append(steered_img)
+        label = f"sing:{sing_list} multi:{multi_list}"
+        labels.append(label)
+
 
 chunk_size = 8   # number of images per output file
 cols = 4         # grid width per chunk
@@ -254,7 +174,97 @@ for chunk_idx in range(0, len(images), chunk_size):
 
     # Save each chunk with index in filename
     file_idx = chunk_idx // chunk_size
-    tiled_img.save(f"images/scale_test_{file_idx}.png")
+    tiled_img.save(f"images/cartoon_test_{file_idx}.png")
+
+# cols = 4
+# rows = (len(images) + cols - 1) // cols
+
+# tile_width, tile_height = images[0].size
+# caption_height = 20  # height for label area below each image
+
+# # Create a blank image for the grid
+# tiled_img = Image.new(
+#     'RGB',
+#     (cols * tile_width, rows * (tile_height + caption_height)),
+#     color=(255, 255, 255)
+# )
+
+# draw = ImageDraw.Draw(tiled_img)
+
+# for idx, (img, label) in enumerate(zip(images, labels)):
+#     x = (idx % cols) * tile_width
+#     y = (idx // cols) * (tile_height + caption_height)
+#     tiled_img.paste(img, (x, y))
+#     # Draw label below image
+#     text_x = x + 5
+#     text_y = y + tile_height + 2
+#     draw.text((text_x, text_y), label, fill=(0, 0, 0))
+
+# multi_list = multi_inds
+# multi_list = [0, 5, 20]
+# # sing_list = sing_inds[:15]
+# sing_list = [0, 5, 15]
+# # # "A cat resting on a laptop keyboard in a bedroom"
+# # # "A view out of a penthouse window overlooking a city"
+# # steered_img = steerer.track_setpoint_all_patches(["A man in a busy city block."], steer_multi=True, steer_single=True, lmbda=1, do_sample=False, temp=1)
+
+
+# sing_scales = [0.03, 0.04, 0.05, 0.06, 0.07]
+# multi_scales = [0.02, 0.025, 0.03]
+# images = []
+# labels = []
+# for sing_scale, multi_scale in product(sing_scales, multi_scales):
+#     # steered_img = steerer.addddddderoolllllllolllllllllllll(["A cat resting on a laptop keyboard in a bedroom"], steer_multi=True, steer_single=True, multi_list=multi_list, sing_list=sing_list, do_sample=False, temp=1)
+#     steered_img = steerer.addddddderoolllllllolllllllllllll(
+#         ["a balcony overlooking a city"], 
+#         steer_multi=True, 
+#         steer_single=True, 
+#         multi_list=multi_list, 
+#         sing_list=sing_list, 
+#         multi_scale=multi_scale, 
+#         sing_scale=sing_scale,
+#         do_sample=False, 
+#         temp=1
+#     )
+
+#     # steered_img.save(f"images/test.png")
+#     images.append(steered_img)
+#     label = f"multi scale:{multi_scale} : sing scale:{sing_scale} "
+#     labels.append(label)
+
+# chunk_size = 8   # number of images per output file
+# cols = 4         # grid width per chunk
+
+# tile_width, tile_height = images[0].size
+# caption_height = 20
+
+# for chunk_idx in range(0, len(images), chunk_size):
+#     chunk_imgs = images[chunk_idx:chunk_idx + chunk_size]
+#     chunk_labels = labels[chunk_idx:chunk_idx + chunk_size]
+
+#     rows = (len(chunk_imgs) + cols - 1) // cols
+
+#     tiled_img = Image.new(
+#         'RGB',
+#         (cols * tile_width, rows * (tile_height + caption_height)),
+#         color=(255, 255, 255)
+#     )
+
+#     draw = ImageDraw.Draw(tiled_img)
+
+#     for idx, (img, label) in enumerate(zip(chunk_imgs, chunk_labels)):
+#         x = (idx % cols) * tile_width
+#         y = (idx // cols) * (tile_height + caption_height)
+
+#         tiled_img.paste(img, (x, y))
+
+#         text_x = x + 5
+#         text_y = y + tile_height + 2
+#         draw.text((text_x, text_y), label, fill=(0, 0, 0))
+
+#     # Save each chunk with index in filename
+#     file_idx = chunk_idx // chunk_size
+#     tiled_img.save(f"images/scale_test_{file_idx}.png")
 
 
 # sing_scale = 0.02
