@@ -13,8 +13,15 @@ import torch as th
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, pipeline
 
-from data_handling_ode import ContrastiveBuilder
-
+from odesteer_utils import (
+    load_model,
+    toxicity_classifier,
+    calculate_dist_n,
+    generate_completion_only,
+    generate_with_steering,
+    collect_layer_activations,
+    MODEL_CONFIGS
+)
 
 ODESTEER_SRC = "odesteer-repo/src"
 if ODESTEER_SRC not in sys.path:
@@ -23,34 +30,7 @@ if ODESTEER_SRC not in sys.path:
 from odesteer.steer import ODESteer
 
 
-MODEL_CONFIGS = {
-    "llama1b": {
-        "hf_name": "meta-llama/Llama-3.2-1B",
-        "tensor_prefix": "llama-3.2-1b",
-    },
-    "gemma2b": {
-        "hf_name": "google/gemma-2-2b",
-        "tensor_prefix": "gemma-2-2b",
-    },
-    "qwen3b": {
-        "hf_name": "Qwen/Qwen2.5-3B",
-        "tensor_prefix": "qwen-2.5-3b",
-    },
-    "llama8b": {
-        "hf_name": "meta-llama/Meta-Llama-3-8B",
-        "tensor_prefix": "llama-3-8b",
-    },
-    "gemma9b": {
-        "hf_name": "google/gemma-2-9b",
-        "tensor_prefix": "gemma-2-9b",
-    },
-    "qwen14b": {
-        "hf_name": "Qwen/Qwen2.5-14B",
-        "tensor_prefix": "qwen-2.5-14b",
-    },
-}
-
-DEFAULT_T_VALUES = [1, 2, 5, 10, 15, 25, 35, 50]
+DEFAULT_T_VALUES = [1, 5, 10, 15, 25, 35, 50, 65, 80,100,120,150,200]
 DEFAULT_ODESTEER_KWARGS = {
     "solver": "euler",
     "steps": 10,
@@ -78,145 +58,6 @@ class SweepSummary:
     dist_3_steered: float
 
 
-def load_model(model_name, quant=False):
-    device = th.device("cuda" if th.cuda.is_available() else "cpu")
-    if quant:
-        quant_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=th.float16,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True,
-        )
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            quantization_config=quant_config,
-            dtype=th.float32,
-            device_map="auto",
-        )
-        tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
-        tokenizer.pad_token = tokenizer.eos_token
-        tokenizer.pad_token_id = tokenizer.eos_token_id
-    else:
-        model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-    return model, tokenizer
-
-
-def toxicity_classifier(device: th.device):
-    pipeline_device = 0 if device.type == "cuda" else -1
-    return pipeline(
-        "text-classification",
-        model="s-nlp/roberta_toxicity_classifier",
-        device=pipeline_device,
-    )
-
-
-def calculate_dist_n(texts_list: Sequence[str], n: int) -> float:
-    if n <= 0:
-        raise ValueError("n must be a positive integer")
-    tokens: List[str] = []
-    for text in texts_list:
-        tokens.extend(text.lower().split())
-    if len(tokens) < n:
-        return 0.0
-    ngrams = [tuple(tokens[i : i + n]) for i in range(len(tokens) - n + 1)]
-    return len(set(ngrams)) / len(ngrams)
-
-
-@th.no_grad()
-def generate_completion_only(
-    model,
-    tokenizer,
-    prompts: Sequence[str],
-    max_new_tokens: int,
-    temperature: float,
-    top_p: float,
-    repetition_penalty: float,
-):
-    model_device = next(model.parameters()).device
-    inputs = tokenizer(
-        prompts,
-        return_tensors="pt",
-        padding=True,
-        truncation=True,
-    ).to(model_device)
-    output = model.generate(
-        input_ids=inputs["input_ids"],
-        attention_mask=inputs["attention_mask"],
-        max_new_tokens=max_new_tokens,
-        return_dict_in_generate=True,
-        do_sample=True,
-        temperature=temperature,
-        top_p=top_p,
-        repetition_penalty=repetition_penalty,
-        pad_token_id=tokenizer.eos_token_id,
-    )
-    output_str = tokenizer.batch_decode(output.sequences, skip_special_tokens=True)
-    return [output_str[idx][len(prompt):].strip() for idx, prompt in enumerate(prompts)]
-
-
-def _extract_and_set_hidden(output):
-    if isinstance(output, tuple):
-        hidden, rest = output[0], output[1:]
-
-        def reassemble(h):
-            return (h, *rest)
-    elif hasattr(output, "last_hidden_state"):
-        hidden = output.last_hidden_state
-
-        def reassemble(h):
-            output.last_hidden_state = h
-            return output
-    else:
-        hidden = output
-
-        def reassemble(h):
-            return h
-    return hidden, reassemble
-
-
-def _steer_hook(module, inputs, output, steer_model, T, steer_position_idx=-1):
-    hidden, reassemble = _extract_and_set_hidden(output)
-    hidden = hidden.clone()
-    batch_idx = th.arange(hidden.shape[0], device=hidden.device)
-    hidden[batch_idx, steer_position_idx] = steer_model.steer(
-        hidden[batch_idx, steer_position_idx],
-        T=T,
-    )
-    return reassemble(hidden)
-
-
-@th.no_grad()
-def generate_with_steering(
-    model,
-    tokenizer,
-    prompts: Sequence[str],
-    steer_model,
-    steer_layer: int,
-    steer_strength_T: float,
-    max_new_tokens: int,
-    temperature: float,
-    top_p: float,
-    repetition_penalty: float,
-):
-    target_layer = model.model.layers[steer_layer]
-    handle = target_layer.register_forward_hook(
-        partial(_steer_hook, steer_model=steer_model, T=steer_strength_T, steer_position_idx=-1)
-    )
-    try:
-        return generate_completion_only(
-            model,
-            tokenizer,
-            prompts,
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            repetition_penalty=repetition_penalty,
-        )
-    finally:
-        handle.remove()
-
-
 def summarize_generations(completions, classifier):
     predictions = classifier(completions, truncation=True, max_length=512)
     labels = [pred["label"] for pred in predictions]
@@ -227,37 +68,6 @@ def summarize_generations(completions, classifier):
         "dist_3": calculate_dist_n(completions, 3),
         "labels": labels,
     }
-
-
-def collect_layer_activations(model, tokenizer, model_name: str, layer_idx: int, num_samples: int):
-    dataset = load_dataset("allenai/real-toxicity-prompts")
-    data = dataset["train"]
-
-    tox_prompts = [
-        item["text"]
-        for item in data["prompt"]
-        if item["toxicity"] is not None and 0.8 <= item["toxicity"] <= 1.0
-    ]
-    tox_dict = ContrastiveBuilder(model, tokenizer).collect_data_batch(
-        tox_prompts,
-        num_samples,
-        f"{model_name}_ode_tox_vec",
-        layer_idx=layer_idx,
-    )
-
-    nontox_prompts = [
-        item["text"]
-        for item in data["prompt"]
-        if item["toxicity"] is not None and 0.0 <= item["toxicity"] <= 0.1
-    ]
-    nontox_dict = ContrastiveBuilder(model, tokenizer).collect_data_batch(
-        nontox_prompts,
-        num_samples,
-        f"{model_name}_ode_nontox_vec",
-        layer_idx=layer_idx,
-    )
-
-    return tox_dict, nontox_dict
 
 
 def get_eval_prompts(num_trials: int, seed: int):
@@ -328,7 +138,6 @@ def main():
         tox_dict, nontox_dict = collect_layer_activations(
             model,
             tokenizer,
-            args.model,
             layer_idx,
             args.train_samples,
         )

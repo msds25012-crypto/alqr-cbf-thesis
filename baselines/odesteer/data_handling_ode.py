@@ -29,7 +29,7 @@ class ContrastiveBuilder:
 
         self.hooks = []
     
-    def collect_data_batch(self, prompts, num_samples, filename, layer_idx=None, batch_size=50):
+    def collect_data_batch(self, prompts, num_samples, layer_idx=None, batch_size=50):
         if layer_idx is not None and (layer_idx < 0 or layer_idx >= self.T):
             raise ValueError(f"layer_idx must be in [0, {self.T - 1}], got {layer_idx}")
         if num_samples > len(prompts):
