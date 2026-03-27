@@ -1,15 +1,8 @@
 import torch as th
-import transformers
-from transformers import AutoTokenizer, AutoModelForCausalLM, RobertaTokenizer, RobertaForSequenceClassification, pipeline, BitsAndBytesConfig
-import lqr_utils_seq as lqr
-from functools import partial
 import pickle
 from steering import LQRSteering
-from PIDsteering import PIDSteering
-from datasets import load_dataset
-import random
 import time
-import tqa_data_script as utils
+import con_data_script as utils
 import json
 import csv
 import yaml
@@ -37,6 +30,9 @@ def run_trials(model, tokenizer, num_trials, A, X_contr, l_list=[1], q_list=[0.1
     # for i in range(len(ds)):
     #     prompts.append(ds[i]["prompt"])
     # samples = random.sample(prompts, num_trials)
+
+    print(A.device)
+    print(X_contr.device)
 
     samples = []
     for i in range(num_trials):
@@ -79,7 +75,6 @@ def run_trials(model, tokenizer, num_trials, A, X_contr, l_list=[1], q_list=[0.1
 
     # print(output_str)
 
-    print(f"A shape: {A.shape}")
 
     data_list = []
     for q in q_list:
@@ -116,7 +111,7 @@ def run_trials(model, tokenizer, num_trials, A, X_contr, l_list=[1], q_list=[0.1
     # file_path = "concepts/" + filename + ".txt"
     # with open(file_path, 'w') as file:
     #     json.dump(data_list, file, indent=4)
-    file_path = "concepts/" + filename + ".csv"
+    file_path = "new_concepts/" + filename + ".csv"
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
     with open(file_path, mode="w", newline="", encoding="utf-8") as file:
         fieldnames = ["lambda", "steered", "unsteered"]
@@ -125,6 +120,64 @@ def run_trials(model, tokenizer, num_trials, A, X_contr, l_list=[1], q_list=[0.1
         writer.writeheader()
         writer.writerows(data_list)
 
+def test_mutlisteer(model, tokenizer, num_trials, A, X_contr, X_contr_alt, l_list=[1], q_list=[0.1], r_list=[1], qf_list=[0.1], k=100, do_sample=True, filename="json_out", batch_size=100):
+    # do_sample = False
+    # print("lambda,q,r,qf,num_safeified,num_unsafeified,num_tox_un,num_tox_contr,dist1_base,dist2_base,dist3_base,dist1_steered,dist2_steered,dist3_steered, ppl_base, ppl_steered")
+    # ds = load_dataset("HumanLLMs/Human-Like-DPO-Dataset")["train"]
+
+    # prompts = []
+    # for i in range(len(ds)):
+    #     prompts.append(ds[i]["prompt"])
+    # samples = random.sample(prompts, num_trials)
+
+    samples = []
+    for i in range(num_trials):
+        samples.append("Once upon a time")
+
+    print(samples[0:3])
+
+    data_list = []
+    for q in q_list:
+        for r in r_list:
+            for qf in qf_list:
+                steer_contr = LQRSteering(model, tokenizer, q=q,r=r,qf=qf, A=A, contrastive_vecs=X_contr, perserve_mem=True)
+                temp_data = []
+                for l in l_list:
+                    contr_completions = []
+                    un_completions = []
+                    
+                    contr_out = []
+                    for i in range(0, len(samples), batch_size):
+                        batch = samples[i:i+batch_size]
+                        contr = steer_contr.multisteer(batch, k, alt_contr=X_contr_alt, lmbda=l, alt_lmbda=1.5, do_sample=do_sample)
+                        contr_out.extend(contr)
+                    # contr = steer_contr.track_setpoint(prompt, k, lmbda=l, do_sample=do_sample)
+                    # contr_out.extend(contr)
+
+                    print(contr)
+
+                    for i in range(len(contr_out)):
+                        data_list.append({
+                            "lambda": l,
+                            "steered": contr_out[i],
+                        })
+                    # data = {
+                    #     "lambda": l,
+                    #     "steered": contr_out,
+                    #     "unsteered": output_str
+                    # }
+                    # data_list.append(data)
+    # file_path = "concepts/" + filename + ".txt"
+    # with open(file_path, 'w') as file:
+    #     json.dump(data_list, file, indent=4)
+    file_path = "new_concepts/" + filename + ".csv"
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    with open(file_path, mode="w", newline="", encoding="utf-8") as file:
+        fieldnames = ["lambda", "steered", "unsteered"]
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+
+        writer.writeheader()
+        writer.writerows(data_list)
 
 
 def main():
@@ -147,28 +200,40 @@ def main():
     
 
 
-    dog = load_file("gemma-2-2b-dog")
-    notdog = load_file("gemma-2-2b-nondog")
-    jac = load_file("gemma-2-2b-dog_jac")
+    dog = load_file("gemma-2-2b-football")
+    notdog = load_file("gemma-2-2b-nonfootball")
+
+    church = load_file("gemma-2-2b-church")
+    notchurch = load_file("gemma-2-2b-nonchurch")
+
+    jac = load_file("gemma-2-2b-football_jac")
     
 
     X = dog["X"]
     X_f = notdog["X"]
     A = jac["A"]
+
+
+    X_c = church['X']
+    X_nc = notchurch['X']
+
     print(f"X device {X.device}")
 
     print(f"X shape: {X.shape}")
     print(f"X_ref shape: {X_f.shape}")
     # print(f"A shape: {A.shape}")
 
-    X_contr = X - X_f
+    X_contr_dog = X - X_f
+    X_contr_church = X_c - X_nc
     del X
     del X_f
 
-    print(X_contr)
+    # a = 0.5
+    # X_contr = a*X_contr_church + (1-a)*X_contr_dog
+    # print(X_contr)
     # l_list = [0.5, 1, 1.5, 2, 2.5]
     # l_list = [3, 3.5, 4]
-    l_list = [1,2,3]
+    l_list = [1.5]
 
     # q_list = [0.1]
     # r_list = [1]
@@ -179,11 +244,11 @@ def main():
 
     # q_list = [0.1, 1]
     # r_list = [0.1, 1, 10]
-    # qf_list = [0.1, 1, 10]
+    # qf_list = [0.1, 1, 10] 
 
-    # q_list = [0.1, 1]
-    # r_list = [0.1, 1, 10]
-    # qf_list = [0.1, 1, 10]
+    q_list = [0.1]
+    r_list = [1]
+    qf_list = [0.1]
     # q_list = [1, 10]
     # r_list = [1, 10]
     # qf_list = [0.1, 1, 10]
@@ -191,23 +256,38 @@ def main():
     # r_list = [1]
     # qf_list = [1]
 
-    num_trials = 100
-    output_filename = "gemma-2-2b-vague-out"
+    num_trials = 3
+    output_filename = "gemma-2-2b-multisteer"
     # num_trials = 437
     # num_trials = 15
-    run_trials(
+    # run_trials(
+    #     model, 
+    #     tokenizer, 
+    #     num_trials,
+    #     A, 
+    #     X_contr, 
+    #     l_list, 
+    #     k=300,
+    #     # q_list, 
+    #     # r_list, 
+    #     # qf_list,
+    #     filename=output_filename
+    # )
+
+    test_mutlisteer(
         model, 
         tokenizer, 
         num_trials,
         A, 
-        X_contr, 
-        l_list, 
+        X_contr=X_contr_church,
+        X_contr_alt=X_contr_dog,
+        l_list=l_list, 
+        k=300,
         # q_list, 
         # r_list, 
         # qf_list,
         filename=output_filename
     )
-
 
 
 if __name__ == "__main__":
