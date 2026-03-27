@@ -21,7 +21,7 @@ def load_file(filename):
     except FileNotFoundError:
         return None
 
-def run_trials(model, tokenizer, num_trials, A, X_contr, l_list=[1], q_list=[0.1], r_list=[1], qf_list=[0.1], k=100, do_sample=True, filename="json_out", batch_size=100):
+def run_trials(model, tokenizer, num_trials, A, X_contr, l_list=[1], q_list=[0.1], r_list=[1], qf_list=[0.1], k=100, do_sample=True, filename="json_out", batch_size=10):
     # do_sample = False
     # print("lambda,q,r,qf,num_safeified,num_unsafeified,num_tox_un,num_tox_contr,dist1_base,dist2_base,dist3_base,dist1_steered,dist2_steered,dist3_steered, ppl_base, ppl_steered")
     # ds = load_dataset("HumanLLMs/Human-Like-DPO-Dataset")["train"]
@@ -41,37 +41,37 @@ def run_trials(model, tokenizer, num_trials, A, X_contr, l_list=[1], q_list=[0.1
     print(samples[0:3])
 
     output_str = []
-    for i in range(0, len(samples), batch_size):
-        batch = samples[i:i+batch_size]
-        start_time = time.perf_counter()
-        # k=50
-        inputs = tokenizer(
-                batch, 
-                return_tensors="pt", 
-                padding=True,
-                truncation=True,
-            ).to(device)
-        input_ids = inputs["input_ids"]
-        attention_mask = inputs["attention_mask"]
+    # for i in range(0, len(samples), batch_size):
+    #     batch = samples[i:i+batch_size]
+    #     start_time = time.perf_counter()
+    #     # k=50
+    #     inputs = tokenizer(
+    #             batch, 
+    #             return_tensors="pt", 
+    #             padding=True,
+    #             truncation=True,
+    #         ).to(device)
+    #     input_ids = inputs["input_ids"]
+    #     attention_mask = inputs["attention_mask"]
 
-        data_list = []
-        with th.no_grad():
-            output_un = model.generate(
-                            input_ids=input_ids,
-                            attention_mask=attention_mask,
-                            max_new_tokens=k,
-                            return_dict_in_generate=True,
-                            do_sample=do_sample,
-                            top_p=0.3,
-                            repetition_penalty=1.2,
-                            temperature=1,
-                            use_cache=False,
-                            pad_token_id=tokenizer.eos_token_id,
-                        )
+    #     data_list = []
+    #     with th.no_grad():
+    #         output_un = model.generate(
+    #                         input_ids=input_ids,
+    #                         attention_mask=attention_mask,
+    #                         max_new_tokens=k,
+    #                         return_dict_in_generate=True,
+    #                         do_sample=do_sample,
+    #                         top_p=0.3,
+    #                         repetition_penalty=1.2,
+    #                         temperature=1,
+    #                         use_cache=False,
+    #                         pad_token_id=tokenizer.eos_token_id,
+    #                     )
 
-            output = tokenizer.batch_decode(output_un.sequences, skip_special_tokens=True)
-            output_str.extend(output)
-            postbase_time = time.perf_counter()
+    #         output = tokenizer.batch_decode(output_un.sequences, skip_special_tokens=True)
+    #         output_str.extend(output)
+    #         postbase_time = time.perf_counter()
 
     # print(output_str)
 
@@ -94,13 +94,13 @@ def run_trials(model, tokenizer, num_trials, A, X_contr, l_list=[1], q_list=[0.1
                     # contr = steer_contr.track_setpoint(prompt, k, lmbda=l, do_sample=do_sample)
                     # contr_out.extend(contr)
 
-                    print(contr)
+                    print(contr_out)
 
                     for i in range(len(contr_out)):
                         data_list.append({
                             "lambda": l,
                             "steered": contr_out[i],
-                            "unsteered": output_str[i]
+                            # "unsteered": output_str[i]
                         })
                     # data = {
                     #     "lambda": l,
@@ -203,8 +203,8 @@ def main():
     dog = load_file("gemma-2-2b-football")
     notdog = load_file("gemma-2-2b-nonfootball")
 
-    church = load_file("gemma-2-2b-church")
-    notchurch = load_file("gemma-2-2b-nonchurch")
+    church = load_file("gemma-2-2b-balloon")
+    notchurch = load_file("gemma-2-2b-balloon")
 
     jac = load_file("gemma-2-2b-football_jac")
     
@@ -223,8 +223,9 @@ def main():
     print(f"X_ref shape: {X_f.shape}")
     # print(f"A shape: {A.shape}")
 
-    X_contr_dog = X - X_f
-    X_contr_church = X_c - X_nc
+    X_contr = X - X_f
+    # X_contr_dog = X - X_f
+    # X_contr_church = X_c - X_nc
     del X
     del X_f
 
@@ -246,7 +247,7 @@ def main():
     # r_list = [0.1, 1, 10]
     # qf_list = [0.1, 1, 10] 
 
-    q_list = [0.1]
+    q_list = [1]
     r_list = [1]
     qf_list = [0.1]
     # q_list = [1, 10]
@@ -256,38 +257,55 @@ def main():
     # r_list = [1]
     # qf_list = [1]
 
-    num_trials = 3
-    output_filename = "gemma-2-2b-multisteer"
-    # num_trials = 437
+
+    A_lr = th.zeros_like(A, device=device)
+    for i, At in enumerate(A):
+        rank = th.linalg.matrix_rank(At)
+        print(f"layer {i} true rank: {rank}")
+        U, S, Vh = th.linalg.svd(At, full_matrices=False)
+        tol = 1.2  # or relative threshold
+        rank = (S > tol).sum()
+        print(f"reduced rank: {rank}")
+        # tol = S.max() * 1e-6
+        mask = S > tol
+        U_k = U[:, mask]
+        S_k = S[mask]
+        Vh_k = Vh[mask, :]
+
+        A_lr[i] = (U_k * S_k) @ Vh_k
+
+    # num_trials = 3
+    output_filename = "gemma-2-2b-lowrank"
+    num_trials = 500
     # num_trials = 15
-    # run_trials(
+    run_trials(
+        model, 
+        tokenizer, 
+        num_trials,
+        A_lr, 
+        X_contr, 
+        l_list, 
+        k=300,
+        q_list=q_list, 
+        r_list=r_list, 
+        qf_list=qf_list,
+        filename=output_filename
+    )
+
+    # test_mutlisteer(
     #     model, 
     #     tokenizer, 
     #     num_trials,
     #     A, 
-    #     X_contr, 
-    #     l_list, 
+    #     X_contr=X_contr_church,
+    #     X_contr_alt=X_contr_dog,
+    #     l_list=l_list, 
     #     k=300,
     #     # q_list, 
     #     # r_list, 
     #     # qf_list,
     #     filename=output_filename
     # )
-
-    test_mutlisteer(
-        model, 
-        tokenizer, 
-        num_trials,
-        A, 
-        X_contr=X_contr_church,
-        X_contr_alt=X_contr_dog,
-        l_list=l_list, 
-        k=300,
-        # q_list, 
-        # r_list, 
-        # qf_list,
-        filename=output_filename
-    )
 
 
 if __name__ == "__main__":
