@@ -28,8 +28,9 @@ class ContrastiveBuilder:
         self.targets = None
 
         self.hooks = []
-    
-    def collect_data_batch(self, prompts, num_samples, layer_idx=None, batch_size=50):
+
+    @th.inference_mode()
+    def collect_data_batch(self, prompts, num_samples, layer_idx=None, batch_size=4, max_length=256):
         if layer_idx is not None and (layer_idx < 0 or layer_idx >= self.T):
             raise ValueError(f"layer_idx must be in [0, {self.T - 1}], got {layer_idx}")
         if num_samples > len(prompts):
@@ -44,17 +45,37 @@ class ContrastiveBuilder:
                 return_tensors="pt", 
                 padding=True,
                 truncation=True,
+                max_length=max_length,
             ).to(self.device)
-            outputs = self.model(**inputs, output_hidden_states=True, use_cache=False)
-            hidden_states = outputs.hidden_states[1:]
+
             if layer_idx is None:
+                outputs = self.model(**inputs, output_hidden_states=True, use_cache=False)
+                hidden_states = outputs.hidden_states[1:]
                 batch_activations = th.stack(
                     [layer_hidden[:, -1, :] for layer_hidden in hidden_states],
                     dim=1,
                 )
+                del outputs, hidden_states
             else:
-                batch_activations = hidden_states[layer_idx][:, -1, :]
-            activations.append(batch_activations.detach().cpu())
+                captured = {}
+
+                def capture_hidden(_module, _inputs, output):
+                    hidden = output[0] if isinstance(output, tuple) else output
+                    captured["hidden"] = hidden[:, -1, :].detach().cpu()
+
+                handle = self.model.model.layers[layer_idx].register_forward_hook(capture_hidden)
+                try:
+                    _ = self.model(**inputs, use_cache=False)
+                finally:
+                    handle.remove()
+
+                batch_activations = captured["hidden"]
+                del captured
+
+            activations.append(batch_activations)
+            del batch_activations, inputs
+            if th.cuda.is_available():
+                th.cuda.empty_cache()
 
         X = th.cat(activations, dim=0)
         # X_mean = X.mean(dim=0)

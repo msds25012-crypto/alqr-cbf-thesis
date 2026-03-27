@@ -1,26 +1,24 @@
 import argparse
 import json
-import os
 import random
 import sys
 from dataclasses import asdict, dataclass
-from functools import partial
 from pathlib import Path
-from typing import List, Sequence
+from typing import List
 
 import numpy as np
 import torch as th
-from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, pipeline
 
 from odesteer_utils import (
-    load_model,
-    toxicity_classifier,
+    MODEL_CONFIGS,
+    build_tqa_judges,
     calculate_dist_n,
+    collect_layer_activations_tqa,
     generate_completion_only,
     generate_with_steering,
-    collect_layer_activations,
-    MODEL_CONFIGS
+    get_questions_no_it,
+    get_t_i_scores,
+    load_model,
 )
 
 ODESTEER_SRC = "odesteer-repo/src"
@@ -46,39 +44,16 @@ DEFAULT_ODESTEER_KWARGS = {
 class SweepSummary:
     layer_idx: int
     steer_strength_T: float
-    toxicity_rate: float
-    toxicity_rate_delta: float
-    toxicity_elicitation_rate: float
-    toxicity_safening_rate: float
+    t: float
+    i: float
+    t_times_i: float
+    t_times_i_delta: float
     dist_1_base: float
     dist_2_base: float
     dist_3_base: float
     dist_1_steered: float
     dist_2_steered: float
     dist_3_steered: float
-
-
-def summarize_generations(completions, classifier):
-    predictions = classifier(completions, truncation=True, max_length=512)
-    labels = [pred["label"] for pred in predictions]
-    return {
-        "toxicity_rate": sum(label == "toxic" for label in labels) / len(completions),
-        "dist_1": calculate_dist_n(completions, 1),
-        "dist_2": calculate_dist_n(completions, 2),
-        "dist_3": calculate_dist_n(completions, 3),
-        "labels": labels,
-    }
-
-
-def get_eval_prompts(num_trials: int, seed: int):
-    dataset = load_dataset("allenai/real-toxicity-prompts")
-    high_tox_prompts = [
-        item["prompt"]["text"]
-        for item in dataset["train"]
-        if item["prompt"]["toxicity"] is not None and 0.9 <= item["prompt"]["toxicity"] <= 1.0
-    ]
-    random.seed(seed)
-    return random.sample(high_tox_prompts, num_trials)
 
 
 def get_layer_indices(num_layers: int) -> list[int]:
@@ -88,24 +63,25 @@ def get_layer_indices(num_layers: int) -> list[int]:
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="ODESteer toxicity sweep.")
+    parser = argparse.ArgumentParser(description="ODESteer TruthfulQA sweep.")
     parser.add_argument("--model", choices=MODEL_CONFIGS.keys(), default="gemma2b")
     parser.add_argument("--num-trials", type=int, default=200)
-    parser.add_argument("--train-samples", type=int, default=5000)
-    parser.add_argument("--activation-batch-size", type=int, default=4)
+    parser.add_argument("--train-samples", type=int, default=1000)
+    parser.add_argument("--activation-batch-size", type=int, default=128)
     parser.add_argument("--activation-max-length", type=int, default=256)
     parser.add_argument("--max-new-tokens", type=int, default=50)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-p", type=float, default=0.3)
     parser.add_argument("--repetition-penalty", type=float, default=1.2)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--run-base", action="store_true", default=True)
+    parser.add_argument("--skip-base", action="store_false", dest="run_base")
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    device = th.device("cuda" if th.cuda.is_available() else "cpu")
     random.seed(args.seed)
     np.random.seed(args.seed)
     th.manual_seed(args.seed)
@@ -114,30 +90,57 @@ def main():
     model, tokenizer = load_model(config["hf_name"], quant=True)
     num_layers = len(model.model.layers)
     layer_indices = get_layer_indices(num_layers)
-    prompts = get_eval_prompts(args.num_trials, args.seed)
-    classifier = toxicity_classifier(device)
+    eval_prompts = get_questions_no_it(args.num_trials)
+    info_judge, info_tokenizer, truth_judge, truth_tokenizer = build_tqa_judges()
 
     print(f"Evaluating model {config['hf_name']}")
     print(f"Using layer indices: {layer_indices}")
     print(f"Using T values: {DEFAULT_T_VALUES}")
-    print(f"Number of prompts: {len(prompts)}")
+    print(f"Number of eval prompts: {len(eval_prompts)}")
+    print(f"Number of train prompts per class: {args.train_samples}")
 
-    baseline_completions = generate_completion_only(
-        model,
-        tokenizer,
-        prompts,
-        max_new_tokens=args.max_new_tokens,
-        temperature=args.temperature,
-        top_p=args.top_p,
-        repetition_penalty=args.repetition_penalty,
-    )
-    baseline_summary = summarize_generations(baseline_completions, classifier)
+    do_sample = args.temperature > 0
+
+    if args.run_base:
+        baseline_outputs = generate_completion_only(
+            model,
+            tokenizer,
+            eval_prompts,
+            max_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            repetition_penalty=args.repetition_penalty,
+            do_sample=do_sample,
+        )
+        base_t, base_i = get_t_i_scores(
+            info_judge,
+            info_tokenizer,
+            truth_judge,
+            truth_tokenizer,
+            tokenizer,
+            eval_prompts,
+            baseline_outputs,
+        )
+        base_ti = base_t * base_i
+        base_dist_1 = calculate_dist_n(baseline_outputs, 1)
+        base_dist_2 = calculate_dist_n(baseline_outputs, 2)
+        base_dist_3 = calculate_dist_n(baseline_outputs, 3)
+        print(f"Baseline t*i: {base_ti}")
+        print(f"Baseline t: {base_t}")
+        print(f"Baseline i: {base_i}")
+    else:
+        baseline_outputs = None
+        base_t = None
+        base_i = None
+        base_ti = None
+        base_dist_1 = None
+        base_dist_2 = None
+        base_dist_3 = None
 
     sweeps_by_layer = {}
-    # sweep over layer and steering strength
     for layer_idx in layer_indices:
         print(f"\nRunning layer {layer_idx}")
-        tox_dict, nontox_dict = collect_layer_activations(
+        true_dict, false_dict = collect_layer_activations_tqa(
             model,
             tokenizer,
             layer_idx,
@@ -146,20 +149,19 @@ def main():
             max_length=args.activation_max_length,
         )
 
-        # fit ODESteer classifier on activations from this layer
         steer_model = ODESteer(**DEFAULT_ODESTEER_KWARGS)
         steer_model.fit(
-            nontox_dict["X"].float().cpu(),
-            tox_dict["X"].float().cpu(),
+            true_dict["X"].float().cpu(),
+            false_dict["X"].float().cpu(),
         )
 
-        layer_results = []
+        layer_results: List[SweepSummary] = []
         for steer_strength_T in DEFAULT_T_VALUES:
             print(f"  Running T={steer_strength_T}")
-            steered_completions = generate_with_steering(
+            steered_outputs = generate_with_steering(
                 model,
                 tokenizer,
-                prompts,
+                eval_prompts,
                 steer_model=steer_model,
                 steer_layer=layer_idx,
                 steer_strength_T=steer_strength_T,
@@ -167,36 +169,39 @@ def main():
                 temperature=args.temperature,
                 top_p=args.top_p,
                 repetition_penalty=args.repetition_penalty,
+                do_sample=do_sample,
             )
-            steered_summary = summarize_generations(steered_completions, classifier)
-            tox_elicitation = sum(
-                base_label != "toxic" and steer_label == "toxic"
-                for base_label, steer_label in zip(
-                    baseline_summary["labels"], steered_summary["labels"]
-                )
+
+            steered_t, steered_i = get_t_i_scores(
+                info_judge,
+                info_tokenizer,
+                truth_judge,
+                truth_tokenizer,
+                tokenizer,
+                eval_prompts,
+                steered_outputs,
             )
-            tox_safening = sum(
-                base_label == "toxic" and steer_label != "toxic"
-                for base_label, steer_label in zip(
-                    baseline_summary["labels"], steered_summary["labels"]
-                )
-            )
+            steered_ti = steered_t * steered_i
+            print(f"  Steered t*i: {steered_ti}")
+            print(f"  Steered t: {steered_t}")
+            print(f"  Steered i: {steered_i}")
+
             layer_results.append(
                 SweepSummary(
                     layer_idx=layer_idx,
                     steer_strength_T=steer_strength_T,
-                    toxicity_rate=steered_summary["toxicity_rate"],
-                    toxicity_rate_delta=(
-                        steered_summary["toxicity_rate"] - baseline_summary["toxicity_rate"]
+                    t=steered_t,
+                    i=steered_i,
+                    t_times_i=steered_ti,
+                    t_times_i_delta=(
+                        steered_ti - base_ti if base_ti is not None else None
                     ),
-                    toxicity_elicitation_rate=tox_elicitation / args.num_trials,
-                    toxicity_safening_rate=tox_safening / args.num_trials,
-                    dist_1_base=baseline_summary["dist_1"],
-                    dist_2_base=baseline_summary["dist_2"],
-                    dist_3_base=baseline_summary["dist_3"],
-                    dist_1_steered=steered_summary["dist_1"],
-                    dist_2_steered=steered_summary["dist_2"],
-                    dist_3_steered=steered_summary["dist_3"],
+                    dist_1_base=base_dist_1,
+                    dist_2_base=base_dist_2,
+                    dist_3_base=base_dist_3,
+                    dist_1_steered=calculate_dist_n(steered_outputs, 1),
+                    dist_2_steered=calculate_dist_n(steered_outputs, 2),
+                    dist_3_steered=calculate_dist_n(steered_outputs, 3),
                 )
             )
         sweeps_by_layer[str(layer_idx)] = [asdict(item) for item in layer_results]
@@ -206,6 +211,8 @@ def main():
         "seed": args.seed,
         "num_trials": args.num_trials,
         "train_samples": args.train_samples,
+        "activation_batch_size": args.activation_batch_size,
+        "activation_max_length": args.activation_max_length,
         "max_new_tokens": args.max_new_tokens,
         "temperature": args.temperature,
         "top_p": args.top_p,
@@ -214,18 +221,20 @@ def main():
         "t_values": DEFAULT_T_VALUES,
         "layers": layer_indices,
         "baseline": {
-            "toxicity_rate": baseline_summary["toxicity_rate"],
-            "dist_1": baseline_summary["dist_1"],
-            "dist_2": baseline_summary["dist_2"],
-            "dist_3": baseline_summary["dist_3"],
+            "t_times_i": base_ti,
+            "t": base_t,
+            "i": base_i,
+            "dist_1": base_dist_1,
+            "dist_2": base_dist_2,
+            "dist_3": base_dist_3,
         },
         "sweeps_by_layer": sweeps_by_layer,
     }
 
     output_path = args.output
     if output_path is None:
-        output_path = Path(__file__).resolve().parent / f"ode_tox_sweep_{args.model}.json"
-    with open(output_path, "w") as f:
+        output_path = Path(__file__).resolve().parent / f"ode_tqa_sweep_{args.model}.json"
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2)
     print(f"\nSaved sweep results to {output_path}")
 

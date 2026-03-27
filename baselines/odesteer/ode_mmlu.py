@@ -1,6 +1,6 @@
 import random
 from pathlib import Path
-from typing import Dict, List, Sequence
+from typing import Dict, List, Literal, Sequence
 
 import torch as th
 from datasets import load_dataset
@@ -11,7 +11,9 @@ from odesteer_utils import (
     load_model,
     generate_with_steering,
     collect_layer_activations,
-    steer_configs,
+    collect_layer_activations_tqa,
+    steer_configs_tqa,
+    steer_configs_tox,
     DEFAULT_ODESTEER_KWARGS,
 )
 import sys
@@ -154,6 +156,7 @@ def _choice_from_decoded_text(text: str) -> str:
 def ode_mmlu(
     model_name: str,
     *,
+    steering_source: Literal["tox", "tqa"] = "tox",
     runs_per_strength: int = 5,
     n_prompts: int = 10,
     n_loop: int = 100,
@@ -167,6 +170,7 @@ def ode_mmlu(
     train_samples=5000
 
 ) -> Dict:
+    steer_configs=steer_configs_tqa if steering_source == "tqa" else steer_configs_tox
     if model_name not in steer_configs:
         raise ValueError(f"Unknown model config: {model_name}")
 
@@ -186,17 +190,31 @@ def ode_mmlu(
 
     model_device = next(model.parameters()).device
 
-    tox_dict, nontox_dict = collect_layer_activations(
-        model,
-        tokenizer,
-        steer_layer,
-        train_samples,
-    )
+    if steering_source == "tox":
+        pos_dict, neg_dict = collect_layer_activations(
+            model,
+            tokenizer,
+            steer_layer,
+            train_samples,
+        )
+        fit_pos, fit_neg = neg_dict, pos_dict
+    elif steering_source == "tqa":
+        true_dict, false_dict = collect_layer_activations_tqa(
+            model,
+            tokenizer,
+            steer_layer,
+            train_samples,
+        )
+        fit_pos, fit_neg = true_dict, false_dict
+    else:
+        raise ValueError(
+            f"Unknown steering_source: {steering_source}. Expected 'tox' or 'tqa'."
+        )
 
     steer_model = ODESteer(**DEFAULT_ODESTEER_KWARGS)
     steer_model.fit(
-        nontox_dict["X"].float().cpu(),
-        tox_dict["X"].float().cpu(),
+        fit_pos["X"].float().cpu(),
+        fit_neg["X"].float().cpu(),
     )
 
     subject_datasets = _load_subject_datasets()
@@ -211,6 +229,7 @@ def ode_mmlu(
         "do_sample": do_sample,
         "temperature": temperature,
         "runs_per_strength": runs_per_strength,
+        "steering_source": steering_source,
         "strengths": [
             {
                 "strength": float(strength),

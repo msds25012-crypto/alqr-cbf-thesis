@@ -1,26 +1,23 @@
 
 import json
-import os.path
 import random
 from pathlib import Path
 from typing import List, Sequence
-from datasets import load_dataset
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 
 import torch as th
-from transformers import pipeline
 import sys
 
 from odesteer_utils import (
     load_model,
-    toxicity_classifier,
     calculate_dist_n,
     generate_completion_only,
     generate_with_steering,
-    collect_layer_activations,
+    collect_layer_activations_tqa,
+    get_questions_no_it,
+    build_tqa_judges,
+    get_t_i_scores,
     get_ppl_from_file,
-    MODEL_CONFIGS,
-    steer_configs_tox,
+    steer_configs_tqa,
     DEFAULT_ODESTEER_KWARGS,
     PATH
 )
@@ -42,22 +39,11 @@ def _sample_prompts(prompts: Sequence[str], num_trials: int) -> List[str]:
 def _attach_prompts(prompts: Sequence[str], completions: Sequence[str]) -> List[str]:
     return [f"{prompt}{completion}" for prompt, completion in zip(prompts, completions)]
 
+
 def generation(configs):
-    dataset_name = "allenai/real-toxicity-prompts"
-    dataset = load_dataset(dataset_name)
-
-    data = dataset["train"]
-    toxic_prompts = [
-                item["text"]
-                for item in data["prompt"]
-                if item["toxicity"] is not None and item["toxicity"] <= 1 and item["toxicity"] >= 0
-            ]
     models = list(configs.keys())
-    device = th.device("cuda" if th.cuda.is_available() else "cpu")
-    tox_output_root = Path(PATH)
-    tox_output_root.mkdir(parents=True, exist_ok=True)
-
-    classifier = toxicity_classifier(device)
+    tqa_output_root = Path(PATH)
+    tqa_output_root.mkdir(parents=True, exist_ok=True)
 
     num_trials = 1000
     num_repeats = 5
@@ -65,11 +51,13 @@ def generation(configs):
     temperature = 1.0
     top_p = 0.3
     repetition_penalty = 1.2
-    gen_batch_size = 8
-    clf_batch_size = 16
+    do_sample = temperature > 0
     # num_trials = 50 #for testing
     # num_repeats = 3 #for testing
-    train_samples=5000
+    train_samples = 1800
+
+
+    info_judge, info_tokenizer, truth_judge, truth_tokenizer = build_tqa_judges()
 
     for model_name in models:
         if model_name not in configs:
@@ -86,23 +74,23 @@ def generation(configs):
         print(f"Running Generation: {model_name}")
         model, tokenizer = load_model(model_path, quant=True)
 
-        tox_dict, nontox_dict = collect_layer_activations(
+        true_dict, false_dict = collect_layer_activations_tqa(
             model,
             tokenizer,
             steer_layer,
             train_samples,
-            batch_size=4,
+            batch_size=128,
         )
 
         steer_model = ODESteer(**DEFAULT_ODESTEER_KWARGS)
         steer_model.fit(
-            nontox_dict["X"].float().cpu(),
-            tox_dict["X"].float().cpu(),
+            true_dict["X"].float().cpu(),
+            false_dict["X"].float().cpu(),
         )
 
         sweep_results = []
         for _ in range(num_repeats):
-            samples = _sample_prompts(toxic_prompts, num_trials)
+            samples = get_questions_no_it(num_trials)
 
             baseline_completions = generate_completion_only(
                 model,
@@ -112,18 +100,22 @@ def generation(configs):
                 temperature=temperature,
                 top_p=top_p,
                 repetition_penalty=repetition_penalty,
+                do_sample=do_sample,
             )
 
             # save full text (prompt+generation) to results
             baseline_texts = _attach_prompts(samples, baseline_completions)
 
-            baseline_predictions = classifier(
+            base_t, base_i = get_t_i_scores(
+                info_judge,
+                info_tokenizer,
+                truth_judge,
+                truth_tokenizer,
+                tokenizer,
+                samples,
                 baseline_completions,
-                truncation=True,
-                max_length=512,
-                batch_size=clf_batch_size,
             )
-            baseline_labels = [pred["label"] for pred in baseline_predictions]
+            base_ti = base_t * base_i
             baseline_dist1 = calculate_dist_n(baseline_completions, 1)
             baseline_dist2 = calculate_dist_n(baseline_completions, 2)
             baseline_dist3 = calculate_dist_n(baseline_completions, 3)
@@ -139,42 +131,35 @@ def generation(configs):
                 temperature=temperature,
                 top_p=top_p,
                 repetition_penalty=repetition_penalty,
+                do_sample=do_sample,
             )
             steered_texts = _attach_prompts(samples, steered_completions)
-            steered_predictions = classifier(
+            steered_t, steered_i = get_t_i_scores(
+                info_judge,
+                info_tokenizer,
+                truth_judge,
+                truth_tokenizer,
+                tokenizer,
+                samples,
                 steered_completions,
-                truncation=True,
-                max_length=512,
-                batch_size=clf_batch_size,
             )
-            steered_labels = [pred["label"] for pred in steered_predictions]
+            steered_ti = steered_t * steered_i
             dist1 = calculate_dist_n(steered_completions, 1)
             dist2 = calculate_dist_n(steered_completions, 2)
             dist3 = calculate_dist_n(steered_completions, 3)
-
-            num_safeified = 0
-            num_unsafeified = 0
-            num_tox_unsteered = 0
-            num_tox_steered = 0
-            for base_label, steer_label in zip(baseline_labels, steered_labels):
-                if steer_label == "toxic" and base_label != "toxic":
-                    num_unsafeified += 1
-                if steer_label != "toxic" and base_label == "toxic":
-                    num_safeified += 1
-                if base_label == "toxic":
-                    num_tox_unsteered += 1
-                if steer_label == "toxic":
-                    num_tox_steered += 1
 
             sweep_results.append(
                 {
                     "prompts": samples,
                     "unsteered output": baseline_texts,
                     "steered output": steered_texts,
-                    "num safeified": num_safeified,
-                    "num unsafeified": num_unsafeified,
-                    "num tox unsteered": num_tox_unsteered,
-                    "num tox steered": num_tox_steered,
+                    "t*i unsteered": float(base_ti),
+                    "t unsteered": float(base_t),
+                    "i unsteered": float(base_i),
+                    "t*i steered": float(steered_ti),
+                    "t steered": float(steered_t),
+                    "i steered": float(steered_i),
+                    "t*i delta": float(steered_ti - base_ti),
                     "dist 1 base": float(baseline_dist1),
                     "dist 2 base": float(baseline_dist2),
                     "dist 3 base": float(baseline_dist3),
@@ -184,8 +169,8 @@ def generation(configs):
                 }
             )
 
-        output_filename = f"{model_name}_ode_tox_eval.txt"
-        output_path = tox_output_root / output_filename
+        output_filename = f"{model_name}_ode_tqa_eval.txt"
+        output_path = tqa_output_root / output_filename
         with output_path.open("w", encoding="utf-8") as json_file:
             json.dump(sweep_results, json_file, indent=4)
 
@@ -198,22 +183,22 @@ def ppl(configs):
     for model_name in models:
         print(f"Running PPL: {model_name}")
         f_pfix = model_name
-        w = get_ppl_from_file(f_pfix + "_ode_tox_eval")
+        w = get_ppl_from_file(f_pfix + "_ode_tqa_eval")
         if w:
             print(f"Finish PPL: {model_name}")
         else:
-            print(f"File not found for PPL: {f_pfix}_ode_tox_eval")
+            print(f"File not found for PPL: {f_pfix}_ode_tqa_eval")
     print("___________________________________________")
     
     
 def mmlu(configs):
-    mmlu_filename = "MMLU_trials"
+    mmlu_filename = "MMLU_trials_tqa"
     mmlu_data = {}
     models=list(configs.keys())
 
     for model_name in models:
         print(f"Running MMLU: {model_name}")
-        out = ode_mmlu(model_name)
+        out = ode_mmlu(model_name, steering_source="tqa",train_samples=1000)
         mmlu_data[model_name] = out
 
         print(f"Finished MMLU model {model_name}")
@@ -224,16 +209,16 @@ def mmlu(configs):
 
 
 def main():
-    # Generate outputs, measure toxicity, and measure Dist 1,2,3
-    generation(steer_configs_tox)
+    # Generate outputs, measure T/I and Dist 1,2,3
+    generation(steer_configs_tqa)
     print("Done with all generations")
 
     ## Measure PPL of the generations
-    ppl(steer_configs_tox)
+    ppl(steer_configs_tqa)
     print("finish all PPL")
 
     # Get MMLU performance
-    mmlu(steer_configs_tox)
+    mmlu(steer_configs_tqa)
     print("finish all MMLU")
 
 

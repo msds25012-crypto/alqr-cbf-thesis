@@ -45,13 +45,70 @@ MODEL_CONFIGS = {
 }
 
 
-steer_configs = {
+steer_configs_tox = {
+    # "llama1b": {
+    #     "model_path": "meta-llama/Llama-3.2-1B",
+    #     "steer_layer": 9,
+    #     "strength": 2,
+    # },
+    # "gemma2b": {
+    #     "model_path": "google/gemma-2-2b",
+    #     "steer_layer": 15,
+    #     "strength": 50,
+    # },
+    # "qwen3b": {
+    #     "model_path": "Qwen/Qwen2.5-3B",
+    #     "steer_layer": 19,
+    #     "strength": 25,
+    # },
+    # "llama8b": {
+    #     "model_path": "meta-llama/Meta-Llama-3-8B",
+    #     # "steer_layer": 19,
+    #     # "strength": 25,
+    # },
+    # "gemma9b": {
+    #     "model_path": "google/gemma-2-9b",
+    #     "steer_layer": 22,
+    #     "strength": 100,
+    # },
+    "qwen14b": {
+        "model_path": "Qwen/Qwen2.5-14B",
+        "steer_layer": 24,
+        "strength": 65,
+    },
+}
+
+steer_configs_tqa = {
+    # "llama1b": {
+    #     "model_path": "meta-llama/Llama-3.2-1B",
+    #     "steer_layer": ,
+    #     "strength": ,
+    # },
     "gemma2b": {
         "model_path": "google/gemma-2-2b",
         "steer_layer": 15,
         "strength": 50,
     },
-    # todo: add more model configs here
+    # "qwen3b": {
+    #     "model_path": "Qwen/Qwen2.5-3B",
+    #     "steer_layer": ,
+    #     "strength": ,
+    # },
+    # "llama8b": {
+    #     "model_path": "meta-llama/Meta-Llama-3-8B",
+    #     # "steer_layer": ,
+    #     # "strength": ,
+    # },
+    # "gemma9b": {
+    #     "model_path": "google/gemma-2-9b",
+    #     "steer_layer": ,
+    #     "strength": ,
+    # },
+    # "qwen14b": {
+    #     "model_path": "Qwen/Qwen2.5-14B",
+    #     "steer_layer": ,
+    #     "strength": ,
+    # },
 }
 
 def load_model(model_name, quant=False):
@@ -106,29 +163,46 @@ def generate_completion_only(
     top_p: float,
     repetition_penalty: float,
     do_sample: bool = True,
+    batch_size: int = 64,
 ):
     model_device = next(model.parameters()).device
-    inputs = tokenizer(
-        prompts,
-        return_tensors="pt",
-        padding=True,
-        truncation=True,
-    ).to(model_device)
-    output = model.generate(
-        input_ids=inputs["input_ids"],
-        attention_mask=inputs["attention_mask"],
-        max_new_tokens=max_new_tokens,
-        return_dict_in_generate=True,
-        do_sample=do_sample,
-        temperature=temperature,
-        top_p=top_p,
-        repetition_penalty=repetition_penalty,
-        pad_token_id=tokenizer.eos_token_id,
-    )
-    output_str = tokenizer.batch_decode(output.sequences, skip_special_tokens=True)
-    return [output_str[idx][len(prompt):].strip() for idx, prompt in enumerate(prompts)]
+    completions = []
 
-def collect_layer_activations(model, tokenizer,  layer_idx: int, num_samples: int):
+    for start_idx in range(0, len(prompts), batch_size):
+        batch_prompts = prompts[start_idx : start_idx + batch_size]
+        inputs = tokenizer(
+            batch_prompts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+        ).to(model_device)
+        output = model.generate(
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+            max_new_tokens=max_new_tokens,
+            return_dict_in_generate=True,
+            do_sample=do_sample,
+            temperature=temperature,
+            top_p=top_p,
+            repetition_penalty=repetition_penalty,
+            pad_token_id=tokenizer.eos_token_id,
+        )
+        output_str = tokenizer.batch_decode(output.sequences, skip_special_tokens=True)
+        completions.extend(
+            output_str[idx][len(prompt):].strip()
+            for idx, prompt in enumerate(batch_prompts)
+        )
+
+    return completions
+
+def collect_layer_activations(
+    model,
+    tokenizer,
+    layer_idx: int,
+    num_samples: int,
+    batch_size: int = 64,
+    max_length: int = 256,
+):
     dataset = load_dataset("allenai/real-toxicity-prompts")
     data = dataset["train"]
 
@@ -141,6 +215,8 @@ def collect_layer_activations(model, tokenizer,  layer_idx: int, num_samples: in
         tox_prompts,
         num_samples,
         layer_idx=layer_idx,
+        batch_size=batch_size,
+        max_length=max_length,
     )
 
     nontox_prompts = [
@@ -152,9 +228,12 @@ def collect_layer_activations(model, tokenizer,  layer_idx: int, num_samples: in
         nontox_prompts,
         num_samples,
         layer_idx=layer_idx,
+        batch_size=batch_size,
+        max_length=max_length,
     )
 
     return tox_dict, nontox_dict
+
 
 
 
@@ -216,6 +295,7 @@ def generate_with_steering(
     top_p: float,
     repetition_penalty: float,
     do_sample: bool = True,
+    batch_size: int = 64,
 ):
     target_layer = model.model.layers[steer_layer]
     handle = target_layer.register_forward_hook(
@@ -231,6 +311,7 @@ def generate_with_steering(
             temperature=temperature,
             top_p=top_p,
             repetition_penalty=repetition_penalty,
+            batch_size=batch_size,
         )
     finally:
         handle.remove()
@@ -453,3 +534,193 @@ def get_ppl_from_file(filename, path=None, BATCH_SZ=10):
     # with open(PATH + file_out + ".txt", 'w') as file:
     #     json.dump(data, file, indent=4)
     return True
+
+
+
+
+
+# =========================== tqa utils =================================
+
+
+def load_tqa_prompts(num_samples_per_class: int): 
+    mc = load_dataset("truthfulqa/truthful_qa", "multiple_choice")
+    dataset = mc["validation"]
+    dataset = dataset.shuffle(seed=None)
+    true_prompts = []
+    false_prompts = []
+    def format_truthfulqa(question, choice):
+        return f"Q: {question} A: {choice}"
+    for i in range(len(dataset)):
+        question = dataset[i]['question']
+        choices = dataset[i]['mc2_targets']['choices']
+        labels = dataset[i]['mc2_targets']['labels']
+
+        assert len(choices) == len(labels), (len(choices), len(labels))
+
+        for j in range(len(choices)): 
+            choice = choices[j]
+            prompt = format_truthfulqa(question, choice)
+            if labels[j] == 1:
+                true_prompts.append(prompt)
+            else:
+                false_prompts.append(prompt)
+
+    tp = true_prompts[:num_samples_per_class]
+    fp = false_prompts[:num_samples_per_class]
+
+    prompts = [t for t in fp] + [t for t in tp]
+    labels = np.array([1] * len(tp) + [0] * len(fp))
+
+    return prompts, labels, fp, tp
+
+# info_judge = None
+# info_tokenizer = None
+
+
+# truth_judge = None
+# truth_tokenizer = None
+def build_tqa_judges():
+    quant_config = BitsAndBytesConfig(
+        load_in_4bit=True,          # or load_in_8bit=True
+        bnb_4bit_compute_dtype=th.float16,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True,
+    )
+    info_judge = AutoModelForCausalLM.from_pretrained("allenai/truthfulqa-info-judge-llama2-7B",quantization_config=quant_config, dtype=th.float32, device_map="auto", trust_remote_code=True)
+    info_tokenizer = AutoTokenizer.from_pretrained("allenai/truthfulqa-info-judge-llama2-7B", padding_side="left")
+    info_tokenizer.pad_token = info_tokenizer.eos_token
+    info_tokenizer.pad_token_id = info_tokenizer.eos_token_id
+
+    truth_judge = AutoModelForCausalLM.from_pretrained("allenai/truthfulqa-truth-judge-llama2-7B",quantization_config=quant_config, dtype=th.float32, device_map="auto", trust_remote_code=True)
+    truth_tokenizer = AutoTokenizer.from_pretrained("allenai/truthfulqa-truth-judge-llama2-7B", padding_side="left")
+    truth_tokenizer.pad_token = truth_tokenizer.eos_token
+    truth_tokenizer.pad_token_id = truth_tokenizer.eos_token_id
+
+    return info_judge, info_tokenizer, truth_judge, truth_tokenizer 
+
+def info_pipeline(info_judge, info_tokenizer, prompts, tokenizer, BATCH_SIZE, device='cuda'):
+    pred_info_label = []
+    for start in range(0, len(prompts), BATCH_SIZE):
+        # print(f"START: {start}")
+        batch = prompts[start:start+BATCH_SIZE]
+        inputs = info_tokenizer(batch, return_tensors="pt", padding=True, truncation=True).to(device)
+        outputs = info_judge.generate(
+            **inputs,
+            use_cache=True,
+            return_dict_in_generate=True,
+            pad_token_id=tokenizer.eos_token_id,
+        )
+        decoded = info_tokenizer.batch_decode(
+                        outputs.sequences,
+                        skip_special_tokens=True
+                    )
+        labels = []
+        for prompt, decoded_text in zip(batch, decoded):
+            labels.append(decoded_text[len(prompt):].strip())
+        # labels = [d[len(prompts[i]):].strip() for i, d in enumerate(decoded)]
+        pred_info_label = pred_info_label + labels
+    
+    return pred_info_label
+
+def truth_pipeline(truth_judge, truth_tokenizer, prompts, tokenizer, BATCH_SIZE, device='cuda'):
+    pred_truth_label = []
+    for start in range(0, len(prompts), BATCH_SIZE):
+        batch = prompts[start:start+BATCH_SIZE]
+        inputs = truth_tokenizer(
+            batch,
+            return_tensors="pt", 
+            padding=True, 
+            truncation=True, 
+        ).to(device)
+        
+        outputs = truth_judge.generate(
+            **inputs,
+            use_cache=True,
+            return_dict_in_generate=True,
+            pad_token_id=tokenizer.eos_token_id,
+        )
+
+        decoded = truth_tokenizer.batch_decode(
+                        outputs.sequences,
+                        skip_special_tokens=True
+                    )
+        labels = []
+        for prompt, decoded_text in zip(batch, decoded):
+            labels.append(decoded_text[len(prompt):].strip())
+        # labels = [d[len(prompts[i]):].strip() for i, d in enumerate(decoded)]
+        pred_truth_label = pred_truth_label + labels
+        # print(f"in loop: {pred_truth_label}")
+    # print(f"at return: {pred_truth_label}")
+    return pred_truth_label
+
+def build_class_prompts(it_format, outputs, spec):
+    prompts = []
+    begin = it_format["begin"]
+    end = it_format["end"]
+    for s in outputs:
+        start = s.index(begin) + len(begin)
+        end_ind = s.index(end, start)
+        
+        prompts.append("Q: " + s[start:end_ind] + "\nA: " + s[end_ind + len(end):] + "\n" + spec + ":")
+    return prompts
+
+def get_t_i_scores(info_judge, info_tokenizer, truth_judge, truth_tokenizer, tokenizer, prompts, outputs):
+    it_format = {"begin": "Q: ",
+                 "end": "A:"}
+    full_out = [p + outputs[i] for i,p in enumerate(prompts)]
+    t_prompt = build_class_prompts(it_format, full_out, "True")
+    # print(f"T PROMPTS: \n {t_prompt}")
+    # print(f"T PROMPTS len: \n {len(t_prompt)}")
+    truth_label = truth_pipeline(truth_judge, truth_tokenizer, t_prompt, tokenizer, 10)
+    t_classifications = [float(pred.lower() == "yes") for pred in truth_label]
+    # print("t classifications: ", t_classifications)
+    t_evaluation_score = th.mean(th.tensor(t_classifications)).item()
+
+    h_prompt = build_class_prompts(it_format, full_out, "Helpful")
+    help_label = info_pipeline(info_judge, info_tokenizer, h_prompt, tokenizer, 10)
+    h_classifications = [float(pred.lower() == "yes") for pred in help_label]
+    # print("h classifications: ", h_classifications)
+    h_evaluation_score = th.mean(th.tensor(h_classifications)).item()
+    return t_evaluation_score, h_evaluation_score
+
+def get_questions_no_it(num_trials, adversarial=False):
+    gen = load_dataset("truthfulqa/truthful_qa", "generation")
+    ds_gen = gen["validation"]
+    shuffled = ds_gen.shuffle(seed=None)  
+
+    # print(shuffled[0])
+    if adversarial:
+        questions = [shuffled[i]["question"] for i in range(len(shuffled)) if shuffled[i]["type"] == "Adversarial"]
+        for i in range(len(questions)):
+            questions[i] = "Q: " + questions[i] + " A:"
+    else:
+        questions = [shuffled[i]["question"] for i in range(len(shuffled))]
+        for i in range(len(questions)):
+            questions[i] = "Q: " + questions[i] + " A:"
+    return questions[:num_trials]
+
+def collect_layer_activations_tqa(
+    model,
+    tokenizer,
+    layer_idx: int,
+    num_samples: int,
+    batch_size: int = 128,
+    max_length: int = 256,
+):
+    _, _, false_prompts, true_prompts = load_tqa_prompts(num_samples)
+    builder = ContrastiveBuilder(model, tokenizer)
+    true_dict = builder.collect_data_batch(
+        true_prompts,
+        num_samples,
+        layer_idx=layer_idx,
+        batch_size=batch_size,
+        max_length=max_length,
+    )
+    false_dict = builder.collect_data_batch(
+        false_prompts,
+        num_samples,
+        layer_idx=layer_idx,
+        batch_size=batch_size,
+        max_length=max_length,
+    )
+    return true_dict, false_dict
