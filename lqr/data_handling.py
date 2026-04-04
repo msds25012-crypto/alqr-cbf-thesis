@@ -339,9 +339,10 @@ class ContrastiveBuilder:
         acts = th.zeros((num_samples, self.T+1, self.n))
 
         sample = random.sample(prompts, num_samples)
+        print(f"sample: {sample}")
         iter = 1
         for i, prompt in enumerate(sample):
-            print(f"iter: {iter}")
+            print(f"iter: {iter}, prompt: {prompt}")
             iter += 1
             inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=max_ctx).to(self.device)
 
@@ -376,7 +377,8 @@ class ContrastiveBuilder:
             wrapped_tfs_temp = [partial(lqr.new_llama_block_wrapper, tf, attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
             tfs_with_control_temp = [partial(lqr.transformerBlockControl, tf) for tf in wrapped_tfs_temp]
             # A, _ = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X)
-            A = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X)
+            # print("before linearize")
+            A = lqr.linearize(tfs_with_control_temp, self.T,self.m,self.X)
             jacs[i] = A.detach().cpu()
             # print(self.X.shape)
             # acts[i] = th.transpose(self.X[:,-1,:],0,1).detach().cpu()
@@ -508,6 +510,8 @@ class ContrastiveBuilder:
 
         collection_times = []
 
+        lqr.print_curr_mem("beginning of jac collection")
+
         iter = 1
         for prompt in sample:
             print(f"iter: {iter}")
@@ -521,6 +525,7 @@ class ContrastiveBuilder:
             embedding_layer = self.model.get_input_embeddings()
             hidden_states = embedding_layer(input_ids)
             self.X = th.zeros_like(hidden_states).repeat(self.T+1, 1, 1).to(self.device)
+            print(f"x nom shape: {self.X.shape}")
 
             with th.no_grad():
                 with self:
@@ -535,6 +540,9 @@ class ContrastiveBuilder:
             
             # self.X_sum = self.X_sum + self.X[:,-1,:]
 
+            lqr.print_curr_mem("before linearization in loop")
+
+        
 
             # and A_iter > 0:
             batch_size, seq_len = input_ids.shape
@@ -546,11 +554,22 @@ class ContrastiveBuilder:
             wrapped_tfs_temp = [partial(lqr.new_llama_block_wrapper, tf, attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
             tfs_with_control_temp = [partial(lqr.transformerBlockControl, tf) for tf in wrapped_tfs_temp]
             # A, _ = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X)
-            A = lqr.linearize_vram_efficient(tfs_with_control_temp,self.T,self.m,self.X)
-            self.A_sum = self.A_sum + A
+            # A = lqr.linearize_vram_efficient(tfs_with_control_temp,self.T,self.m,self.X)
+            
+            lqr.print_curr_mem("right before linearization in loop")
+            
+            with th.backends.cuda.sdp_kernel(
+                enable_flash=False,
+                enable_mem_efficient=False,
+                enable_math=True
+            ):
+                # A = lqr.linearize_vram_efficient_jvp(tfs_with_control_temp,self.T,self.m,self.X)
+                print("RUNNING THE STREAMED JVP")
+                lqr.linearize_jvp_streamed_gpu(tfs_with_control_temp,self.T,self.m,self.X,self.A_sum)
+            # self.A_sum = self.A_sum + A
                 # A_iter -= 1
-            del A
-            A = None
+            # del A
+            # A = None
             del self.X
             self.X = None
 
@@ -560,26 +579,7 @@ class ContrastiveBuilder:
             rt = end - start
             
             print(f"loop runtime: {rt}")
-            collection_times.append(rt)
-            gc.collect()
-            if th.cuda.is_available():
-                device_id = th.cuda.current_device()
-
-                # Print allocated memory (currently used by tensors)
-                print(f"th.cuda.memory_allocated: {th.cuda.memory_allocated(device_id)/1024**3:.3f}GB")
-                
-                # Print reserved memory (allocated by PyTorch's internal memory manager, including cached free blocks)
-                print(f"th.cuda.memory_reserved: {th.cuda.memory_reserved(device_id)/1024**3:.3f}GB")
-                
-                # Print peak memory usage during the current process lifetime
-                print(f"th.cuda.max_memory_reserved: {th.cuda.max_memory_reserved(device_id)/1024**3:.3f}GB")
-
-                # Optional: Clear the memory cache (can make `nvidia-smi` report lower usage, but doesn't affect PyTorch's ability to allocate new tensors)
-                th.cuda.empty_cache() 
-            else:
-                print("CUDA not available")
-
-
+            lqr.print_curr_mem(f"after linearization in loop {iter}")
         total = num_samples*num_tokens
         print(f"total: {total}")
         tensor_dict = {
@@ -598,6 +598,8 @@ class ContrastiveBuilder:
 
         del self.A_sum
         self.A_sum = None
+        
+
         
 
 

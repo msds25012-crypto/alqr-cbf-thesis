@@ -1,6 +1,30 @@
 import torch as th
 import matplotlib.pyplot as plt
 import os
+import gc
+
+def print_curr_mem(msg):
+    print("======================================================================\n======================================================================")
+    print(msg)
+    gc.collect()
+    if th.cuda.is_available():
+        device_id = th.cuda.current_device()
+
+        # Print allocated memory (currently used by tensors)
+        print(f"th.cuda.memory_allocated: {th.cuda.memory_allocated(device_id)/1024**3:.3f}GB")
+        
+        # Print reserved memory (allocated by PyTorch's internal memory manager, including cached free blocks)
+        print(f"th.cuda.memory_reserved: {th.cuda.memory_reserved(device_id)/1024**3:.3f}GB")
+        
+        # Print peak memory usage during the current process lifetime
+        print(f"th.cuda.max_memory_reserved: {th.cuda.max_memory_reserved(device_id)/1024**3:.3f}GB")
+
+        # Optional: Clear the memory cache (can make `nvidia-smi` report lower usage, but doesn't affect PyTorch's ability to allocate new tensors)
+        th.cuda.empty_cache() 
+    else:
+        print("CUDA not available")
+    print("======================================================================\n======================================================================")
+
 
 def linearize(tfs, T, m, X_nom):
     """
@@ -37,7 +61,161 @@ def linearize(tfs, T, m, X_nom):
 
     return A
 
-import torch as th
+def linearize_jvp_streamed_gpu(tfs, T, m, X_nom, A_out):
+    """
+    Streamed forward-mode Jacobian computation (column-by-column),
+    writing directly into a preallocated GPU tensor.
+
+    Args:
+        tfs: list of dynamics functions
+        T: time horizon
+        m: control dim
+        X_nom: (T+1, ..., n)
+        A_out: (T, n, n) PREALLOCATED on GPU
+
+    Returns:
+        None (writes into A_out in-place)
+    """
+    device = X_nom.device
+    dtype = X_nom.dtype
+    n = X_nom.shape[-1]
+
+    U_nom = th.zeros((T, m), device=device, dtype=dtype)
+
+
+    print_curr_mem("before internal loop")
+
+
+    for t in range(T):
+        x = X_nom[t].detach()
+        u = U_nom[t].detach()
+
+        def f_last(x_):
+            return tfs[t](x_, u)[..., -1, :]  # (..., n)
+
+        for j in range(n):
+            # Create basis vector (reuse buffer if you want further optimization)
+            v = th.zeros_like(x)
+            v[..., j] = 1.0
+
+            # JVP: returns (f(x), J @ v)
+            _, jvp_out = th.autograd.functional.jvp(
+                f_last,
+                (x,),
+                (v,),
+                create_graph=False,
+                strict=False,
+            )
+
+            # Write column directly → NO intermediate A
+            # A_out[t, :, j] = jvp_out[..., -1, :]
+            A_out[t, :, j] = jvp_out
+
+            del v, jvp_out
+
+
+
+        # Clean up per-time-step
+        del x, u
+
+        print_curr_mem("in internal loop")
+
+    # no return (in-place)
+
+
+# def linearize_vram_efficient_jvp(tfs, T, m, X_nom):
+#     """
+#     Memory-efficient linearization using forward-mode JVPs (column-by-column Jacobian).
+
+#     Args:
+#         tfs: list of dynamics functions
+#         T: time horizon
+#         m: control dim
+#         X_nom: nominal states (T+1, k, n)
+
+#     Returns:
+#         A: (T, n, n)
+#     """
+#     device = X_nom.device
+#     dtype = X_nom.dtype
+#     n = X_nom.shape[-1]
+
+#     print("======================================================================\n======================================================================")
+#     print("right before A")
+#     gc.collect()
+#     if th.cuda.is_available():
+#         device_id = th.cuda.current_device()
+
+#         # Print allocated memory (currently used by tensors)
+#         print(f"th.cuda.memory_allocated: {th.cuda.memory_allocated(device_id)/1024**3:.3f}GB")
+        
+#         # Print reserved memory (allocated by PyTorch's internal memory manager, including cached free blocks)
+#         print(f"th.cuda.memory_reserved: {th.cuda.memory_reserved(device_id)/1024**3:.3f}GB")
+        
+#         # Print peak memory usage during the current process lifetime
+#         print(f"th.cuda.max_memory_reserved: {th.cuda.max_memory_reserved(device_id)/1024**3:.3f}GB")
+
+#         # Optional: Clear the memory cache (can make `nvidia-smi` report lower usage, but doesn't affect PyTorch's ability to allocate new tensors)
+#         th.cuda.empty_cache() 
+#     else:
+#         print("CUDA not available")
+#     print("======================================================================\n======================================================================")
+
+
+#     A = th.zeros((T, n, n), device=device, dtype=dtype)
+
+#     for t in range(T):
+#         print(f"jvp iteration: {t}")
+#         x = X_nom[t].detach()
+#         u = th.zeros(m, device=device)
+
+#         def f_last(x, u):
+#             return tfs[t](x, u)[..., -1, :]  # (..., n)
+
+#         # Compute Jacobian column-by-column using JVP
+#         for j in range(n):
+#             # Basis vector in input space
+#             v = th.zeros_like(x)
+#             v[..., j] = 1.0
+
+#             # JVP: (f(x), J @ v)
+#             _, jvp_out = th.autograd.functional.jvp(
+#                 lambda x_: f_last(x_, u),
+#                 (x,),
+#                 (v,),
+#                 create_graph=False
+#             )
+
+#             # Extract final state slice to match indexing
+#             # print(jvp_out.shape)
+#             # A[t, :, j] = jvp_out[..., -1, :]
+#             A[t, :, j] = jvp_out
+#         print("======================================================================\n======================================================================")
+#         print("in outer loop")
+#         gc.collect()
+#         if th.cuda.is_available():
+#             device_id = th.cuda.current_device()
+
+#             # Print allocated memory (currently used by tensors)
+#             print(f"th.cuda.memory_allocated: {th.cuda.memory_allocated(device_id)/1024**3:.3f}GB")
+            
+#             # Print reserved memory (allocated by PyTorch's internal memory manager, including cached free blocks)
+#             print(f"th.cuda.memory_reserved: {th.cuda.memory_reserved(device_id)/1024**3:.3f}GB")
+            
+#             # Print peak memory usage during the current process lifetime
+#             print(f"th.cuda.max_memory_reserved: {th.cuda.max_memory_reserved(device_id)/1024**3:.3f}GB")
+
+#             # Optional: Clear the memory cache (can make `nvidia-smi` report lower usage, but doesn't affect PyTorch's ability to allocate new tensors)
+#             th.cuda.empty_cache() 
+#         else:
+#             print("CUDA not available")
+#         print("======================================================================\n======================================================================\nFinal GPU numbers:")
+
+
+#         # Explicit cleanup (helps VRAM fragmentation)
+#         del x, u, v, jvp_out
+
+#     return A
 
 def linearize_vram_efficient(tfs, T, m, X_nom):
     """
@@ -193,10 +371,12 @@ def time_varying_lqr_noB_mem_efficient(A, Q, R, S_T):
         F = (Stp1 @ At).to(A.device) # = BkT Sk+1 Ak  
         G = (Qt + At.transpose(-2, -1) @ Stp1 @ At).to(A.device) # = Ak^T Sk+1 Ak + Qk
 
-        P_inv = th.linalg.inv(P)
-        K[t] = P_inv @ F
+        # P_inv = th.linalg.inv(P)
+        K[t] = th.linalg.solve(P, F)
+        # K[t] = P_inv @ F
 
-        S[t] = (G - F.transpose(-2, -1) @ P_inv @ F).to('cpu')
+        # S[t] = (G - F.transpose(-2, -1) @ P_inv @ F).to('cpu')
+        S[t] = (G - F.transpose(-2, -1) @ th.linalg.solve(P, F)).to('cpu')
 
     return K
 
