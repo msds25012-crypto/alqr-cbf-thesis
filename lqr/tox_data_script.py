@@ -8,6 +8,7 @@ import random
 import pickle
 import time
 from data_handling import ContrastiveBuilder
+import gc
 
 device = th.device("cuda" if th.cuda.is_available() else "cpu")
 dataset_name = "allenai/real-toxicity-prompts"
@@ -49,26 +50,59 @@ def get_tox_prompts(lb, ub):
             ]
     return prompts
 
+def get_alternate_prompts():
+    ds = load_dataset("tcapelle/jigsaw-toxic-comment-classification-challenge")['test']
+    prompts = [p['comment_text'] for p in ds]
+    return prompts
+
 def main():
-    model_name = "google/gemma-2-2b"
-    # model_name = "Qwen/Qwen2.5-14B"
-    model, tokenizer = load_model(model_name, quant=True)
-    toxic_prompts = get_tox_prompts(0.8, 1)
-    nontoxic_prompts = get_tox_prompts(0, 0.1)
 
-    dataguy = ContrastiveBuilder(model, tokenizer)
-    filename = "gemma-2-2b-tox"
+    model_keys = {  
+        "google/gemma-2-2b": "gemma-2-2b",
+        "meta-llama/Meta-Llama-3-8B": "Llama-3-8B",
+        "Qwen/Qwen2.5-3B": "Qwen2.5-3B"
 
-    dataguy.collect_data_batch(toxic_prompts, 200, filename)
-    print("done with nontox")
+    }
 
-    filename = "gemma-2-2b-nontox"
-    dataguy.collect_data_batch(nontoxic_prompts, 200, filename)
-    print("done with tox")
+    models = [
+        # "google/gemma-2-2b",
+        # "meta-llama/Meta-Llama-3-8B",
+        "Qwen/Qwen2.5-3B",
+        # "Qwen/Qwen2.5-14B",
+    #    "Qwen/Qwen2.5-32B"
+    ]
 
-    # filename = "gemma-2-2b-nontox_jac"
-    # dataguy.collect_jacobians(nontoxic_prompts, 50, filename)
-    # print("done with jac")
+    for model_name in models:
+        print(f"running model: {model_name}")
+
+        model, tokenizer = load_model(model_name, quant=True)
+
+
+
+        lqr.print_curr_mem("just the model")
+        toxic_prompts = get_tox_prompts(0.8, 1)
+        nontoxic_prompts = get_tox_prompts(0, 0.1)
+
+        dataguy = ContrastiveBuilder(model, tokenizer)
+        # filename = "Qwen2.5-14B-tox"
+        # filename = "Llama-3.1-8B-Instruct-tox"
+        
+        # filename = "Qwen2.5-32B-tox"
+        # # filename = "Qwen2.5-3B-tox"
+        # dataguy.collect_data_batch(toxic_prompts, 200, filename)
+        # # print("done with dtox")
+
+        # # filename = "Qwen2.5-3B-nontox"
+        # filename = "Qwen2.5-32B-nontox"
+        # dataguy.collect_data_batch(nontoxic_prompts, 200, filename)
+        # print("done with nontox")
+
+        # filename = "Llama-3.2-1B-nontox_jac"
+        filename = "test_jac"
+        dataguy.collect_jacobians_vram(nontoxic_prompts, 1, filename, max_ctx=24)
+        print("done with jac")
+
+        lqr.print_curr_mem("final GPU results")
 
 if __name__ == "__main__":
     print(f"device: {device}")
