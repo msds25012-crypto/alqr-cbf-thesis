@@ -583,7 +583,7 @@ class ContrastiveBuilder:
         total = num_samples*num_tokens
         print(f"total: {total}")
         tensor_dict = {
-            "A": self.A_sum / total,
+            "A": self.A_sum.detach().cpu() / total,
         } 
 
         print("========================= Collection Times =========================")

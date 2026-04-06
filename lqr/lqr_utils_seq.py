@@ -16,6 +16,9 @@ def print_curr_mem(msg):
         # Print reserved memory (allocated by PyTorch's internal memory manager, including cached free blocks)
         print(f"th.cuda.memory_reserved: {th.cuda.memory_reserved(device_id)/1024**3:.3f}GB")
         
+        # Print reserved memory (allocated by PyTorch's internal memory manager, including cached free blocks)
+        print(f"th.cuda.max_memory_allocated: {th.cuda.max_memory_allocated(device_id)/1024**3:.3f}GB")
+
         # Print peak memory usage during the current process lifetime
         print(f"th.cuda.max_memory_reserved: {th.cuda.max_memory_reserved(device_id)/1024**3:.3f}GB")
 
