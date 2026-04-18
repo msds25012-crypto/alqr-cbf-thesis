@@ -1,6 +1,6 @@
-from test_tqa import PATH, load_file, run_trials, no_it_format
+from truthfulness.test_tqa import PATH, load_file, run_trials, no_it_format
 from testMMLU import test_mmlu
-import tqa_data_script as utils
+import truthfulness.tqa_data_script as utils
 import json
 import os.path
 

@@ -2,7 +2,7 @@ import torch as th
 import pickle
 from lqr.steering import LQRSteering
 import time
-import lqr.concepts.con_data_script as utils
+import con_data_script as utils
 import json
 import csv
 import yaml

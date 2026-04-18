@@ -10,7 +10,7 @@ from datasets import load_dataset
 import random
 import time
 # from evaluate import load
-import refusal.ref_data_script as utils
+import lqr.refusal.ref_data_script as utils
 import json
 import yaml
 from pathlib import Path

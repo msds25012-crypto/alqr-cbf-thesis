@@ -1,7 +1,7 @@
-from test_toxicityPID import PATH, load_file, run_trials
+from lqr.toxicity.test_toxicityPID import PATH, load_file, run_trials
 from ppl_from_file import get_ppl_from_file
 from testMMLU import test_mmlu
-import tox_data_script as utils
+import lqr.toxicity.tox_data_script as utils
 import json
 import os.path
 

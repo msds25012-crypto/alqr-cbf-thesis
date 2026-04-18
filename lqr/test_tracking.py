@@ -1,10 +1,10 @@
 import torch as th
 import transformers
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
-import lqr_utils_seq as lqr
+import lqr.lqr_utils as lqr
 from functools import partial
 import pickle
-from steering import LQRSteering
+from lqr.steering import LQRSteering
 import os   
 os.environ["PYTORCH_SDP_DISABLE_FLASH"] = "1"
 os.environ["PYTORCH_SDP_DISABLE_MEM_EFFICIENT"] = "1"
@@ -12,19 +12,12 @@ os.environ["PYTORCH_SDP_DISABLE_HEURISTIC"] = "1"
 
 device = th.device("cuda" if th.cuda.is_available() else "cpu")
 
-# use the same tokenizer as TinyLlama
-# tokenizer = AutoTokenizer.from_pretrained("TinyLlama/TinyLlama-1.1B-step-50K-105b")
-
 # load model from huggingface
-# model_name = "PY007/TinyLlama-1.1B-step-50K-105b"
 # model_name = "meta-llama/Llama-3.2-1B"
 # model_name = "google/gemma-2-2b"
-# model_name = "meta-llama/Meta-Llama-3-8B" # Requires quantization for 40GB VRAM
-model_name = "Qwen/Qwen2.5-3B" # Requires quantization for 16GB VRAM
+# model_name = "meta-llama/Meta-Llama-3-8B"
+model_name = "Qwen/Qwen2.5-3B"
 
-# model = LlamaForCausalLM.from_pretrained(
-    # model_name).to(device)
-    
 quant_config = BitsAndBytesConfig( # QUANTIZATION
     load_in_4bit=True,          # or load_in_8bit=True
     bnb_4bit_compute_dtype=th.float16,
@@ -35,8 +28,6 @@ model = AutoModelForCausalLM.from_pretrained(
     model_name, quantization_config=quant_config, dtype=th.float32, device_map="auto")# QUANTIZED
 
 
-# model = AutoModelForCausalLM.from_pretrained( # UNQUANTIZED
-    # model_name).to(device)
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 
 

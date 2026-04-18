@@ -2,14 +2,12 @@ import torch as th
 import numpy as np
 import transformers
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
-import lqr_utils_seq as lqr
+import lqr.lqr_utils as lqr
 from functools import partial
 from datasets import load_dataset
 import random
 import pickle
-import time
-from steering import Mode
-import yaml
+from lqr.steering import Mode
 from contextlib import contextmanager
 import functools
 from typing import Callable, List, Tuple
@@ -17,10 +15,8 @@ import torch.nn as nn
 from timeit import default_timer as timer
 import gc
 
-with open('config/config.yaml', 'r') as f:
-    config_data = yaml.safe_load(f)
-PICKLE_JAR = config_data["environment"]["pickle_jar"]
-# print(PICKLE_JAR)
+from lqr.config import config
+PICKLE_JAR = config["environment"]["pickle_jar"]
 
 class ContrastiveBuilder:
     def __init__(
@@ -39,9 +35,6 @@ class ContrastiveBuilder:
         self.n = self.model.model.embed_tokens.embedding_dim
         self.m = self.n
         print(f"Latent dim: {self.n}")
-        # self.A_sum = th.zeros((self.T, self.n, self.n,)).to(self.device)
-        # self.X_sum = th.zeros((self.T+1, self.n,)).to(self.device)
-        # self.X_mean = th.zeros((self.T+1, self.n,)).to(self.device)
         self.A_sum = None
         self.X_sum = None
         self.X_mean = None
@@ -49,10 +42,6 @@ class ContrastiveBuilder:
         self.X = None # to allocate at runtime -- dependent on input length
 
         self.e_prev = None
-        # self.e_prev = th.zeros_like(self.X_sum[0])
-        
-        # self.U = th.zeros((self.T, self.n), device=self.device)
-        # self.e_sum = th.zeros_like(self.X_sum[0])
         self.e_sum = None
 
         self.targets = None
@@ -163,7 +152,7 @@ class ContrastiveBuilder:
 
         position_embeddings = self.model.model.rotary_emb(hidden_states, position_ids)
 
-        wrapped_tfs_temp = [partial(lqr.new_llama_block_wrapper, tf, attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
+        wrapped_tfs_temp = [partial(lqr.tf_block_wrapper, tf, attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
         tfs_with_control_temp = [partial(lqr.transformerBlockControl, tf) for tf in wrapped_tfs_temp]
         # print(f"Xshape: {self.X.shape}")
         A, _ = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X)
@@ -211,7 +200,7 @@ class ContrastiveBuilder:
 
                 position_embeddings = self.model.model.rotary_emb(hidden_states, position_ids)
 
-                wrapped_tfs_temp = [partial(lqr.new_llama_block_wrapper, tf, attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
+                wrapped_tfs_temp = [partial(lqr.tf_block_wrapper, tf, attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
                 tfs_with_control_temp = [partial(lqr.transformerBlockControl, tf) for tf in wrapped_tfs_temp]
                 A, _ = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X)
                 self.A_sum = self.A_sum + A
@@ -236,9 +225,6 @@ class ContrastiveBuilder:
     
     def collect_data_batch(self, prompts, num_samples, filename, num_tokens=1, batch_size=50):
         self.mode = Mode.COLLECTING
-        # A_iter = num_A
-        # self.X_sum = th.zeros((self.T+1, self.n,)).to(self.device)
-        # self.X_mean = th.zeros((self.T+1, self.n,)).to(self.device)
         X_sum = th.zeros((self.T+1, self.n,)).to(self.device)
 
         samples = random.sample(prompts, num_samples)
@@ -323,16 +309,6 @@ class ContrastiveBuilder:
             # X_mean = th.mean(self.X[:,:,-1,:], dim = 1)
         return acts
 
-        # tensor_dict = {
-        #     "X": X_mean,
-        # } 
-
-        # with open(PICKLE_JAR + filename + ".pkl", "wb") as f:
-        #     pickle.dump(tensor_dict, f)
-        
-        # del self.X
-        # self.X = None
-
     def collect_acts_and_jacs(self, prompts, num_samples, filename, num_tokens=1, max_ctx=512): # 24 works for llama 8-9b
         self.mode = Mode.COLLECTING
         jacs = th.zeros((num_samples, self.T, self.n, self.n,))
@@ -374,32 +350,17 @@ class ContrastiveBuilder:
 
             position_embeddings = self.model.model.rotary_emb(hidden_states, position_ids)
 
-            wrapped_tfs_temp = [partial(lqr.new_llama_block_wrapper, tf, attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
+            wrapped_tfs_temp = [partial(lqr.tf_block_wrapper, tf, attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
             tfs_with_control_temp = [partial(lqr.transformerBlockControl, tf) for tf in wrapped_tfs_temp]
-            # A, _ = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X)
-            # print("before linearize")
             A = lqr.linearize(tfs_with_control_temp, self.T,self.m,self.X)
             jacs[i] = A.detach().cpu()
-            # print(self.X.shape)
-            # acts[i] = th.transpose(self.X[:,-1,:],0,1).detach().cpu()
             acts[i] = self.X[:,-1,:].detach().cpu()
-                # A_iter -= 1
             del A
             A = None
             del self.X
             self.X = None
 
-        # tensor_dict = {
-        #     "acts": acts,
-        #     "jacs": jacs,
-        # } 
-
-        # with open(PICKLE_JAR + filename + ".pkl", "wb") as f:
-        #     pickle.dump(tensor_dict, f)
         return acts,jacs
-
-        # del self.A_sum
-        # self.A_sum = None
 
 
     def collect_jacobians(self, prompts, num_samples, filename, num_tokens=1, max_ctx=512): # 24 works for llama 8-9b
@@ -445,7 +406,7 @@ class ContrastiveBuilder:
 
             position_embeddings = self.model.model.rotary_emb(hidden_states, position_ids)
 
-            wrapped_tfs_temp = [partial(lqr.new_llama_block_wrapper, tf, attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
+            wrapped_tfs_temp = [partial(lqr.tf_block_wrapper, tf, attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
             tfs_with_control_temp = [partial(lqr.transformerBlockControl, tf) for tf in wrapped_tfs_temp]
             # A, _ = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X)
             A = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X)
@@ -551,10 +512,8 @@ class ContrastiveBuilder:
 
             position_embeddings = self.model.model.rotary_emb(hidden_states, position_ids)
 
-            wrapped_tfs_temp = [partial(lqr.new_llama_block_wrapper, tf, attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
+            wrapped_tfs_temp = [partial(lqr.tf_block_wrapper, tf, attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
             tfs_with_control_temp = [partial(lqr.transformerBlockControl, tf) for tf in wrapped_tfs_temp]
-            # A, _ = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X)
-            # A = lqr.linearize_vram_efficient(tfs_with_control_temp,self.T,self.m,self.X)
             
             lqr.print_curr_mem("right before linearization in loop")
             
@@ -563,7 +522,6 @@ class ContrastiveBuilder:
                 enable_mem_efficient=False,
                 enable_math=True
             ):
-                # A = lqr.linearize_vram_efficient_jvp(tfs_with_control_temp,self.T,self.m,self.X)
                 print("RUNNING THE STREAMED JVP")
                 lqr.linearize_jvp_streamed_gpu(tfs_with_control_temp,self.T,self.m,self.X,self.A_sum)
             # self.A_sum = self.A_sum + A

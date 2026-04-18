@@ -2,11 +2,11 @@ import torch as th
 from datasets import load_dataset
 import random
 from transformers import AutoTokenizer, AutoModelForCausalLM, RobertaTokenizer, RobertaForSequenceClassification, pipeline, BitsAndBytesConfig
-import lqr_utils_seq as lqr
+import lqr.lqr_utils as lqr
 from functools import partial
 import pickle
-from steering import LQRSteering
-from PIDsteering import PIDSteering
+from lqr.steering import LQRSteering
+from lqr.PIDsteering import PIDSteering
 from datasets import load_dataset
 import random
 import time
@@ -254,7 +254,6 @@ if __name__ == "__main__":
     # N_PROMPTS = 10      # prompts per batch
     # N_LOOP = 1
     # lambda_list = [0.5]
-    # steer_contr = LQRSteering(model, tokenizer, q=0.1,r=1,qf=0.1, A=A, contrastive_vecs=X_contr)
-    steer_contr = PIDSteering(model, tokenizer, kp=1,ki=0.01,kd=0.01, A=A, contrastive_vecs=X_contr)
+    steer_contr = LQRSteering(model, tokenizer, q=0.1,r=1,qf=0.1, A=A, contrastive_vecs=X_contr)
 
     main()

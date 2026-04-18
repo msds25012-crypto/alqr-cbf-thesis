@@ -1,7 +1,7 @@
 import torch as th
 import transformers
 from transformers import AutoTokenizer, AutoModelForCausalLM, RobertaTokenizer, RobertaForSequenceClassification, pipeline, BitsAndBytesConfig
-import lqr.lqr_utils as lqr
+import lqr_utils_seq as lqr
 from functools import partial
 import pickle
 from lqr.steering import LQRSteering

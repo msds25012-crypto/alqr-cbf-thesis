@@ -1,7 +1,7 @@
-from test_toxicity import PATH, load_file, run_trials
-from ppl_from_file import get_ppl_from_file
-from testMMLU import test_mmlu
-import tox_data_script as utils
+from lqr.toxicity.test_toxicity import PATH, load_file, run_trials
+from lqr.benchmarks.ppl_from_file import get_ppl_from_file
+from lqr.benchmarks.testMMLU import test_mmlu
+import lqr.toxicity.tox_data_script as utils
 import json
 import os.path
 
@@ -32,9 +32,9 @@ def generation(models, params):
         X_tox = tox["X"]
         X_contr = X - X_tox
         sweeps = []
-        for i in range(5):
+        for i in range(1):
             # print(f"running test_toxicity.py: {model_name}")
-            num_trials = 1000
+            num_trials = 10
             s = run_trials(
                 model, 
                 tokenizer, 

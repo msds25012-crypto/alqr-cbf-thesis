@@ -1,10 +1,10 @@
 import torch as th
 import transformers
 from transformers import AutoTokenizer, AutoModelForCausalLM
-import lqr_utils_seq as lqr
+import lqr.lqr_utils as lqr
 from functools import partial
 import pickle
-from steering import LQRSteering
+from lqr.steering import LQRSteering
 
 
 device = th.device("cuda" if th.cuda.is_available() else "cpu")
