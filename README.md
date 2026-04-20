@@ -1,0 +1,90 @@
+# Local Linearity of LLMs Enables Activation Steering via Model-Based Linear Optimal Control
+
+This repository contains the implementation of the methods and benchmarks proposed in [Link Text](TODO). Core implementations, including **A-LQR** and **S-PID**, are located in the `steer` directory.
+
+---
+
+## Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/trustworthyrobotics/lqr-activation-steering.git
+cd lqr-activation-steering
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+---
+
+## Jacobian Collection
+
+Each submodule includes a `<name>_data_script.py` file that handles contrastive vector construction and Jacobian collection.
+
+These computations are best performed offline, as memory requirements can be high. If needed, you can replace calls to `collect_jacobians` with `collect_jacobians_vram` for reduced memory usage.
+
+```bash
+# Toxicity
+python -m steer.toxicity.tox_data_script --model=gemma2b  # replace with your model of choice
+
+# Truthfulness
+python -m steer.truthfulness.tqa_data_script --model=gemma2b
+
+# Concept Steering (see script for available concepts)
+python -m steer.concepts.con_data_script --model=gemma2b
+
+# Refusal
+python -m steer.refusal.ref_data_script --model=gemma2b
+```
+
+---
+
+## Evaluation
+
+Toxicity and Truthfulness (TQA) include dedicated evaluation scripts with auxiliary benchmarks.  
+Concept Steering and Refusal use slightly different evaluation pipelines.
+
+```bash
+# Toxicity
+python -m steer.tox_eval        # A-LQR
+python -m steer.tox_evalPID     # S-PID
+
+# Truthfulness
+python -m steer.tqa_eval        # A-LQR
+python -m steer.tqa_evalPID     # S-PID
+
+# Concept Steering (see script for available concepts)
+python -m steer.concepts.concept_pipeline   # A-LQR
+
+# Refusal
+python -m steer.refusal.ref_asr_script --model=gemma2b --steering=lqr  # A-LQR+
+python -m steer.refusal.ref_asr_script --model=gemma2b --steering=pid  # PID
+```
+
+Each submodule also includes a `test_<name>.py` script for debugging and experimentation.  
+Notably, `test_ref.py` provides an out-of-the-box interactive demo.
+
+```bash
+python -m steer.refusal.test_ref # A-LQR+
+
+```
+
+---
+
+## Citation
+
+If you use this project in your work, please cite:
+
+```bibtex
+TODO
+```
+
+---
+
+## Contact
+
+For questions or collaboration:
+
+- Name: Your Name  
+- Email: your.email@example.com  
+- GitHub: https://github.com/yourusername
