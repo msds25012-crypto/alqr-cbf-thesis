@@ -111,7 +111,7 @@ def main():
 
     model, tokenizer = load_model(model_name, quant=True)
 
-    dataguy = ContrastiveBuilder(model, tokenizer)
+    data_handler = ContrastiveBuilder(model, tokenizer)
 
     key = model_keys[model_name]
 
@@ -127,15 +127,15 @@ def main():
         
         
         filename = key + '-' + concept
-        dataguy.collect_data_batch(sen, 200, filename)
+        data_handler.collect_data_batch(sen, 200, filename)
         print("done with ", filename)
 
         filename = key + '-non' + concept
-        dataguy.collect_data_batch(other, 200, filename)
+        data_handler.collect_data_batch(other, 200, filename)
         print("done with ", filename)
 
         filename = key + '-' + concept + '_jac'
-        dataguy.collect_jacobians(sen, 25, filename, max_ctx=24)
+        data_handler.collect_jacobians(sen, 25, filename, max_ctx=24)
         print("done with jac")
 
 if __name__ == "__main__":

@@ -126,18 +126,18 @@ def main():
 
     t_prompts, f_prompts = tqa_prompts()
 
-    dataguy = ContrastiveBuilder(model, tokenizer)
+    data_handler = ContrastiveBuilder(model, tokenizer)
 
     filename = key + '-truetest'
-    dataguy.collect_data_batch(t_prompts, 12, filename)
+    data_handler.collect_data_batch(t_prompts, 12, filename)
     print("done with", filename)
 
     filename = key + '-falsetest'
-    dataguy.collect_data_batch(f_prompts, 12, filename)
+    data_handler.collect_data_batch(f_prompts, 12, filename)
     print("done with ", filename)
 
     filename = key + '-true_jactest'
-    dataguy.collect_jacobians(t_prompts, 1, filename, max_ctx=24)
+    data_handler.collect_jacobians(t_prompts, 1, filename, max_ctx=24)
     print("done with jac")
 
 if __name__ == "__main__":

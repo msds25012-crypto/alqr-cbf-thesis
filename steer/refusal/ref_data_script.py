@@ -188,7 +188,7 @@ def main():
 
     key = model_keys[model_name]
 
-    dataguy = ContrastiveBuilder(model, tokenizer)
+    data_handler = ContrastiveBuilder(model, tokenizer)
 
     harmful_prompts, _ = get_harmful_instructions_test_()
     safe_prompts, _ = get_harmless_instructions()
@@ -206,15 +206,15 @@ def main():
     ) for p in safe_prompts]
 
     filename = key + '-ref'
-    dataguy.collect_data_batch(formatted_harmful_prompts, 200, filename)
+    data_handler.collect_data_batch(formatted_harmful_prompts, 200, filename)
     print("done with", filename)
 
     filename = key + '-nonref'
-    dataguy.collect_data_batch(formatted_safe_prompts, 200, filename)
+    data_handler.collect_data_batch(formatted_safe_prompts, 200, filename)
     print("done with ", filename)
 
     filename = key + '-nonref_jac'
-    dataguy.collect_jacobians(formatted_safe_prompts, 50, filename, max_ctx=24)
+    data_handler.collect_jacobians(formatted_safe_prompts, 50, filename, max_ctx=24)
     print("done with jac")
 
 if __name__ == "__main__":

@@ -26,7 +26,7 @@ device = th.device("cuda" if th.cuda.is_available() else "cpu")
 
 
 def collect_data(model, tokenizer, key, concept):
-    dataguy = ContrastiveBuilder(model, tokenizer)
+    data_handler = ContrastiveBuilder(model, tokenizer)
     sen, other = utils.get_target_and_other_sentences('concepts/filtered_sentences.csv', concept)
     
     filename = key + '-' + concept
@@ -35,7 +35,7 @@ def collect_data(model, tokenizer, key, concept):
     if path.exists():
         print(f"{filename} already exists")
     else:
-        dataguy.collect_data_batch(sen, 200, filename)
+        data_handler.collect_data_batch(sen, 200, filename)
         print("done with ", filename)
 
     filename = key + '-' + 'non' + concept
@@ -43,7 +43,7 @@ def collect_data(model, tokenizer, key, concept):
     if path.exists():
         print(f"{filename} already exists")
     else:
-        dataguy.collect_data_batch(other, 200, filename)
+        data_handler.collect_data_batch(other, 200, filename)
         print("done with ", filename)
 
     filename = key + '-' + concept + '_jac'
@@ -51,7 +51,7 @@ def collect_data(model, tokenizer, key, concept):
     if path.exists():
         print(f"{filename} already exists")
     else:
-        dataguy.collect_jacobians(sen, 50, filename, max_ctx=32)
+        data_handler.collect_jacobians(sen, 50, filename, max_ctx=32)
         print("done with jac")
     
 def load_files(key, concept):

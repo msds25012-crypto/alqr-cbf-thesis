@@ -19,10 +19,11 @@ import argparse
 
 from scipy.linalg import subspace_angles
 
+from pathlib import Path
 
-with open('config/config.yaml', 'r') as f:
-    config_data = yaml.safe_load(f)
-PICKLE_JAR = config_data["environment"]["pickle_jar"]
+from steer.config import config
+PICKLE_JAR = Path(__file__).resolve().parent / config["environment"]["pickle_jar"]
+
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"device: {device}")
@@ -57,25 +58,10 @@ def get_safe_prompts():
 
 def load_file(filename):
     try:
-        with open(PICKLE_JAR + filename + ".pkl", "rb") as f:
+        with open(PICKLE_JAR / (filename + ".pkl"), "rb") as f:
             return pickle.load(f)
     except FileNotFoundError:
         return None
-
-# def plot_singular_vals(s_lists, filename):
-#     # num_layers = len(s_lists)
-#     # fig, ax = plt.subplots(1, num_layers, figsize=(4*num_layers, 4))
-#     s_m = [max([max(s) for s in s_sub]) for s_sub in s_lists]
-#     for i, s_sub in enumerate(s_lists):
-#         for s in s_sub:
-#             s = s/s_m[i]
-#             plt.semilogy(s)
-#         plt.grid(True)
-#         plt.tight_layout()
-#         plt.title(f"Layer {i}")
-#         plt.xlabel("Mode index")
-#         plt.ylabel("Normalized singular value")
-#         plt.savefig("jacobian_alignment/" + filename + "-singular-values/" f"spectrum-layer-{i}.png")
 
 def plot_singular_vals(s_lists, filename):
     # Ensure output directory exists
@@ -101,227 +87,6 @@ def plot_singular_vals(s_lists, filename):
         fig.tight_layout()
         fig.savefig(f"{out_dir}/spectrum-layer-{i}.png")
         plt.close(fig)
-# model_name = "google/gemma-2-2b"
-# model_name = "Qwen/Qwen2.5-3B"
-# model_name = "meta-llama/Meta-Llama-3-8B",
-def do_the_thing(model_name, filename, from_file=False):
-    # model_name = "meta-llama/Llama-3.2-1B"
-
-    # model_name = "google/gemma-2-9b-it"
-    # model_name = "Qwen/Qwen2.5-14B-Instruct"
-    similarities = []
-    model, tokenizer = load_model(model_name, quant=True)
-    dataguy = ContrastiveBuilder(model, tokenizer)
-    # toxic_prompts = utils.get_tox_prompts(0.8, 0.9)
-    toxic_prompts = None
-
-    def weighted_cos(angles, wX, wY):
-        k = min(len(angles), len(wX), len(wY))
-        weights = np.sqrt(wX[:k] * wY[:k])
-        return np.sum(weights * np.cos(angles[:k])) / np.sum(weights)
-
-
-    if from_file:
-        file_path = 'jacobian_alignment/' + filename + '.txt'
-
-        # List to hold similarities per layer
-
-        with open(file_path, 'r') as f:
-            dat = json.load(f)
-            similarities=dat["similarities"]
-            singular_vals=np.array(dat["singular vals"])
-            # layer_sims = []
-            # for line in f:
-            #     line = line.strip()
-            #     if line.startswith("Layer"):
-            #         # If this is not the first layer, append the previous layer's data
-            #         if layer_sims:
-            #             similarities.append(layer_sims)
-            #             layer_sims = []
-            #     elif "Energy-weighted similarity" in line:
-            #         # Extract the numeric value using regex
-            #         match = re.search(r": ([0-9.]+)", line)
-            #         if match:
-            #             value = float(match.group(1))
-            #             layer_sims.append(value)
-    # Append last layer
-        # if layer_sims:
-        #     similarities.append(layer_sims)
-
-        _, A_m = dataguy.collect_acts_and_jacs(prompts=toxic_prompts, num_samples=1, filename= filename+"-acts-jacs")
-        # k = A_m.shape[-1] // 20
-        print(f"Am shape: {A_m.shape}")
-        print(f"shape: {singular_vals.shape}")
-        k = len(singular_vals[0][0]) // 20
-        print(f"k: {k}")
-        
-    else:
-       
-
-        acts, As = dataguy.collect_acts_and_jacs(prompts=toxic_prompts, num_samples=10, filename= filename+"-acts-jacs")
-
-        print(As.shape)
-
-        k_max = As.shape[-1] // 20
-        print(f"k max: {k_max}")
-
-        num_matrices = len(As)  # number of trajectory linearizations
-        num_layers = len(As[0])  # assuming all matrices have the same number of layers
-
-
-        similarities = []
-
-        s_list_complete = []
-        
-        for i in range(num_layers):
-        # for i in range(1):
-            print(f"Layer {i}")
-            layer_sims = []
-            
-            # Convert all tensors to numpy
-            mats = [A[i].detach().cpu().numpy() for A in As]
-            
-            # Compute mean Jacobian
-            A_m = sum(mats) / num_matrices
-
-            # Full SVDs
-            svd_results = [np.linalg.svd(mat, full_matrices=False) for mat in mats]
-            U_list = [svd[0] for svd in svd_results]
-            s_list = [svd[1] for svd in svd_results]
-            s_list_complete.append([s.tolist() for s in s_list])
-
-            U_m, s_m, _ = np.linalg.svd(A_m, full_matrices=False)
-
-            # Determine k (top modes)
-            k = min([U.shape[1] for U in U_list] + [U_m.shape[1], k_max])
-            U_list = [U[:, :k] for U in U_list]
-            s_list = [s[:k] for s in s_list]
-            U_m = U_m[:, :k]
-            s_m = s_m[:k]
-
-            # Normalize singular values to get relative energy
-            w_list = [s / s.sum() for s in s_list]
-            # w_list = [s / sum(s) for s in s_list]
-            w_m = s_m / s_m.sum()
-
-            # Mean vs each trajectory
-            for idx, (U, w) in enumerate(zip(U_list, w_list)):
-                angles_m = subspace_angles(U_m, U)
-                score_m = weighted_cos(angles_m, w_m, w)
-                print(f"Energy-weighted similarity (m-{idx}): {score_m:.4f}")
-                layer_sims.append(score_m.item())
-                
-            similarities.append(layer_sims)
-
-            print("\n")
-
-        plot_singular_vals(s_list_complete, filename)
-
-        data = {
-            "singular vals": s_list_complete,
-            "similarities": similarities
-        }
-        with open("jacobian_alignment/" + filename + ".txt", 'w') as file:
-            json.dump(data, file, indent=4)
-
-        # Convert to numpy array if you want
-    sim_array = np.array(similarities)  # shape: (num_layers, num_jacobians)
-
-    print(sim_array.shape)
-    print(sim_array[:2])  # print first 2 layers as check
-
-
-    import matplotlib.pyplot as plt
-
-    # sim_array: shape (num_layers, num_jacobians)
-    num_layers = sim_array.shape[0]
-
-    def random_orthonormal(n, k, rng=None):
-        """
-        Generate an n x k matrix with orthonormal columns,
-        uniformly random (Haar measure on the Stiefel manifold).
-        """
-        if rng is None:
-            rng = np.random.default_rng()
-
-        X = rng.standard_normal((n, k))
-        Q, R = np.linalg.qr(X)
-
-        # Fix sign ambiguity for reproducibility / true Haar
-        signs = np.sign(np.diag(R))
-        Q *= signs
-
-        return Q
-
-
-
-    if from_file:
-        _, s_ref, _ = np.linalg.svd(A_m[0,0,:,:], full_matrices=False)
-        s_ref = s_ref[:k]
-        # s_ref = singular_vals[13,-1][:k]
-        n=singular_vals.shape[-1]
-        T=singular_vals.shape[0]
-    else:
-        s_ref = np.array(data["singular vals"][0][0])[:k]
-        n = len(data["singular vals"][0][0])
-        T = len(data["singular vals"])
-    # print(n)
-    print(f"T:{T}")
-    w_energy = s_ref / s_ref.sum()
-
-    # w_energy = np.ones(k)/ k
-
-    w_energy_perm = np.random.permutation(w_energy)
-    S_rand_energy = []
-
-    num_trials = 100
-    # n = A_m.shape[-1]
-    print(w_energy)
-
-    print(f"n: {n}")
-    print(f"k: {k}")
-    for _ in range(num_trials):
-        M1 = random_orthonormal(n, k)
-        M2 = random_orthonormal(n, k)
-
-        # print(np.trace(M1.T @ M1))
-
-        angles = subspace_angles(M1, M2)
-        # print(angles)
-        score = weighted_cos(angles, w_energy, w_energy_perm)
-        S_rand_energy.append(score)
-
-    S_rand_energy = np.array(S_rand_energy).mean()
-
-    print(f"rand energy: {S_rand_energy}")
-
-    # Compute statistics per layer
-    layer_mean = np.mean(sim_array, axis=1)
-    layer_min = np.min(sim_array, axis=1)
-    layer_max = np.max(sim_array, axis=1)
-
-    # normed_array = (sim_array - S_rand_energy)/ (1-S_rand_energy)
-    # layer_mean = np.mean(normed_array, axis=1)
-    # layer_min = np.min(normed_array, axis=1)
-    # layer_max = np.max(normed_array, axis=1)
-
-    # Plot
-    plt.figure(figsize=(12,6))
-    plt.plot(range(num_layers), layer_mean, label='Mean similarity', color='blue', linewidth=2)
-    plt.fill_between(range(num_layers), layer_min, layer_max, color='blue', alpha=0.2, label='Min-Max range')
-    plt.axhline(y=S_rand_energy, color="r", linestyle="--", label="Random baseline")
-
-    # plt.xlim(0, A_m.shape[1]-1)
-    plt.xlim(0, T-1)
-    plt.ylim(0, 1)
-    plt.xlabel("Layer")
-    plt.ylabel("Energy-weighted similarity with mean Jacobian")
-    plt.title("Layer-wise Similarity Across 10 Jacobians")
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig("jacobian_alignment/" + filename + ".png")
-
 
 
 def get_target_and_other_sentences(csv_path, target):
@@ -376,20 +141,14 @@ def save_coupling_figure_and_data(
         out_dir / f"{prefix}_data_n{n}.pt",
     )
 
-    # --- Plot (matshow expects numpy) ---
-    # fig, ax = plt.subplots()
-    # im = ax.matshow(data.numpy(), cmap=cmap)
-    # fig.colorbar(im, ax=ax)
 
     t = len(sim_mats)
 
     fig, axes = plt.subplots(1, t, figsize=(3*t, 3))
 
-    # Make sure axes is iterable when n == 1
     if t == 1:
         axes = [axes]
 
-    # Use shared normalization so colors match
     vmin = 0
     vmax = 1
 
@@ -427,92 +186,6 @@ def save_coupling_figure_and_data(
         fig.savefig(out_dir / f"{prefix}_n{n}_sings.pdf", bbox_inches="tight")
         plt.close(fig)
 
-def do_the_thing_better(model, tokenizer, prompts, key, filename, num_plots=3):
-
-    similarities = []
-    # toxic_prompts = utils.get_tox_prompts(0.8, 0.9)
-
-
-    def weighted_cos(angles, wX, wY):
-        k = min(len(angles), len(wX), len(wY))
-        weights = np.sqrt(wX[:k] * wY[:k])
-        return np.sum(weights * np.cos(angles[:k])) / np.sum(weights)
-
-       
-
-    dataguy = ContrastiveBuilder(model, tokenizer)
-    acts, As = dataguy.collect_acts_and_jacs(prompts=prompts, num_samples=15, filename= filename+"-acts-jacs", max_ctx=16)
-    del acts
-    As = As.detach().cpu()
-
-    k_max = As.shape[-1] // 20
-    print(f"k max: {k_max}")
-
-    num_matrices = len(As)  # number of trajectory linearizations
-    num_layers = len(As[0])  # assuming all matrices have the same number of layers
-
-    skip = num_layers // num_plots
-
-    similarities = []
-
-    s_list_complete = []
-
-    for i in range(0, num_layers, skip):
-    # for i in range(1):
-        print(f"Layer {i}")
-        
-        # Convert all tensors to numpy
-        mats = [A[i].detach().cpu().numpy() for A in As]
-        
-        # Compute mean Jacobian
-
-        # Full SVDs
-        svd_results = [np.linalg.svd(mat, full_matrices=False) for mat in mats]
-        U_list = [svd[0] for svd in svd_results]
-        s_list = [svd[1] for svd in svd_results]
-        s_list_complete.append([s.tolist() for s in s_list])
-
-        # Determine k (top modes)
-        k = min([U.shape[1] for U in U_list] + [k_max])
-        U_list = [U[:, :k] for U in U_list]
-        s_list = [s[:k] for s in s_list]
-
-
-        # Normalize singular values to get relative energy
-        w_list = [s / s.sum() for s in s_list]
-        # w_list = [s / sum(s) for s in s_list]
-
-        nmats = len(mats)
-        sim_mat = np.zeros((nmats, nmats))
-
-        print(len(mats))
-        print(len(U_list))
-        print(len(w_list))
-        print(sim_mat.shape)
-        for j in range(nmats):
-            for r in range(nmats):
-                print(j, r)
-                print(U_list[j].shape)
-                angles = subspace_angles(U_list[j], U_list[r])
-                score = weighted_cos(angles, w_list[j], w_list[r])
-
-                sim_mat[j,r] = score
-
-        # for idx, (U, w) in enumerate(zip(U_list, w_list)):
-        #     angles_m = subspace_angles(U_m, U)
-        #     score_m = weighted_cos(angles_m, w_m, w)
-        #     print(f"Energy-weighted similarity (m-{idx}): {score_m:.4f}")
-        #     layer_sims.append(score_m.item())
-            
-        similarities.append(sim_mat)
-
-        # print("\n")
-
-    out_file = key + '/' + filename
-    save_coupling_figure_and_data(similarities, s_list_complete, k, out_file)
-    del As
-
-
 def spectral_subspace_similarity(U_W, s_W, U_X, s_X, eps=1e-12):
         """
         Spectrally-informed similarity between top-k subspaces.
@@ -536,118 +209,21 @@ def spectral_subspace_similarity(U_W, s_W, U_X, s_X, eps=1e-12):
             Normalized spectral subspace similarity
         """
 
-        # k x k cross-subspace overlap
         C = U_W.T @ U_X
 
-        # form weighted alignment matrix
         A = (s_W[:, None] * C) * s_X[None, :]
 
-        # nuclear norm via SVD
         singvals = np.linalg.svd(A, compute_uv=False)
         nuclear = singvals.sum()
 
-        # Frobenius norms of spectra
         norm_W = np.linalg.norm(s_W)
         norm_X = np.linalg.norm(s_X)
 
-        # normalized similarity
         sim = nuclear / (norm_W * norm_X + eps)
         return sim
 
 
 LATENT_DIM = 0
-def do_the_thing_try(model, tokenizer, prompts, key, filename, num_plots=3, batch_sz=15):
-
-    similarities = []
-    # toxic_prompts = utils.get_tox_prompts(0.8, 0.9)
-
-
-    
-
-
-    # def weighted_cos(angles, wX, wY):
-    #     k = min(len(angles), len(wX), len(wY))
-    #     weights = np.sqrt(wX[:k] * wY[:k])
-    #     return np.sum(weights * np.cos(angles[:k])) / np.sum(weights)
-
-       
-
-    dataguy = ContrastiveBuilder(model, tokenizer)
-
-    for i in range(0,100,batch_sz):
-        acts, As = dataguy.collect_acts_and_jacs(prompts=prompts, num_samples=15, filename= filename+"-acts-jacs", max_ctx=16)
-    del acts
-    As = As.detach().cpu()
-
-    LATENT_DIM = As.shape[-1]
-    k_max = As.shape[-1] // 20
-    print(f"k max: {k_max}")
-
-    num_matrices = len(As)  # number of trajectory linearizations
-    num_layers = len(As[0])  # assuming all matrices have the same number of layers
-
-    skip = num_layers // num_plots
-
-    similarities = []
-
-    s_list_complete = []
-
-    for i in range(0, num_layers, skip):
-    # for i in range(1):
-        print(f"Layer {i}")
-        
-        # Convert all tensors to numpy
-        mats = [A[i].detach().cpu().numpy() for A in As]
-        
-        # Compute mean Jacobian
-
-        # Full SVDs
-        svd_results = [np.linalg.svd(mat, full_matrices=False) for mat in mats]
-        U_list = [svd[0] for svd in svd_results]
-        s_list = [svd[1] for svd in svd_results]
-        s_list_complete.append([s.tolist() for s in s_list])
-
-        # Determine k (top modes)
-        k = min([U.shape[1] for U in U_list] + [k_max])
-        U_list = [U[:, :k] for U in U_list]
-        s_list = [s[:k] for s in s_list]
-
-
-        # Normalize singular values to get relative energy
-        w_list = [s / s.sum() for s in s_list]
-        # w_list = [s / sum(s) for s in s_list]
-
-        nmats = len(mats)
-        sim_mat = np.zeros((nmats, nmats))
-
-        print(len(mats))
-        print(len(U_list))
-        print(len(w_list))
-        print(sim_mat.shape)
-        for j in range(nmats):
-            for r in range(nmats):
-                print(j, r)
-                print(U_list[j].shape)
-                angles = subspace_angles(U_list[j], U_list[r])
-                score = spectral_subspace_similarity(U_list[j], s_list[j], U_list[r], s_list[r])
-                # score = weighted_cos(angles, w_list[j], w_list[r])
-
-                sim_mat[j,r] = score
-
-        # for idx, (U, w) in enumerate(zip(U_list, w_list)):
-        #     angles_m = subspace_angles(U_m, U)
-        #     score_m = weighted_cos(angles_m, w_m, w)
-        #     print(f"Energy-weighted similarity (m-{idx}): {score_m:.4f}")
-        #     layer_sims.append(score_m.item())
-            
-        similarities.append(sim_mat)
-
-        # print("\n")
-
-    out_file = key + '/' + filename
-    save_coupling_figure_and_data(similarities, s_list_complete, k, out_file)
-    del As
-
 
 def topk_svd(mat, k):
     """
@@ -659,29 +235,15 @@ def topk_svd(mat, k):
     return U[:, :k], S[:k], Vh[:k, :]
 
 
-def do_the_thing_BIG(model, tokenizer, prompts, key, filename, num_plots=3, num_mats=10, batch_sz=15):
+def alignment_plots(model, tokenizer, prompts, key, filename, num_plots=3, num_mats=10, batch_sz=15):
 
     similarities = []
-    # toxic_prompts = utils.get_tox_prompts(0.8, 0.9)
-
-
-    
-
-
-    # def weighted_cos(angles, wX, wY):
-    #     k = min(len(angles), len(wX), len(wY))
-    #     weights = np.sqrt(wX[:k] * wY[:k])
-    #     return np.sum(weights * np.cos(angles[:k])) / np.sum(weights)
-
-       
-
-    dataguy = ContrastiveBuilder(model, tokenizer)
+    data_handler = ContrastiveBuilder(model, tokenizer)
 
 
     LATENT_DIM = None
     k_max = None
 
-    # These mirror your original organization
     s_list_complete = []   # [layer][matrix][k]
     U_list_complete = []   # optional
 
@@ -690,7 +252,7 @@ def do_the_thing_BIG(model, tokenizer, prompts, key, filename, num_plots=3, num_
     for i in range(0, num_mats, batch_sz):
 
         nmats = min(batch_sz, num_mats-i)
-        acts, As = dataguy.collect_acts_and_jacs(
+        acts, As = data_handler.collect_acts_and_jacs(
             prompts=prompts,
             num_samples=nmats,
             filename=filename + "-acts-jacs",
@@ -699,7 +261,6 @@ def do_the_thing_BIG(model, tokenizer, prompts, key, filename, num_plots=3, num_
 
         del acts  # free ASAP
 
-        # As: [num_matrices, num_layers, out_dim, in_dim]
         As = As.detach()  # keep on device for SVD
 
         if LATENT_DIM is None:
@@ -719,16 +280,7 @@ def do_the_thing_BIG(model, tokenizer, prompts, key, filename, num_plots=3, num_
 
         num_matrices = As.shape[0]
         num_layers = len(As[0])  # assuming all matrices have the same number of layers
-        # skip = num_layers // num_plots
-
-        # if num_plots == 1:
-        #     indices = [0]
-        # else:
-        #     indices = [round(i * (num_layers - 1) / (num_plots - 1)) for i in range(num_plots)]
-
-        # ---- process immediately, layer by layer ----
         for l, layer in enumerate(range(0, num_layers, skip)):
-        # for l, layer in enumerate(indices):
             print(f"Batch {i}, Layer {layer}")
 
             for m in range(num_matrices):
@@ -740,7 +292,6 @@ def do_the_thing_BIG(model, tokenizer, prompts, key, filename, num_plots=3, num_
                 U_k, s_k, Vh_k = topk_svd(J, k)
                 s_all_k = np.linalg.svd(J, compute_uv=False)
 
-                # move minimal data to CPU
                 all_s[l].append(s_all_k)
                 s_list_complete[l].append(s_k)
                 U_list_complete[l].append(U_k)
@@ -794,17 +345,16 @@ def load_adversarial():
             e.append(p['adversarial'])
     return e
 
-def do_the_thing_MULTI(model, tokenizer, base_prompts, other_prompts, key, filename, num_plots=3, num_mats=10, batch_sz=15):
+def alignment_plots_multi(model, tokenizer, base_prompts, other_prompts, key, filename, num_plots=3, num_mats=10, batch_sz=15):
 
     similarities = []
 
-    dataguy = ContrastiveBuilder(model, tokenizer)
+    data_handler = ContrastiveBuilder(model, tokenizer)
 
 
     LATENT_DIM = None
     k_max = None
 
-    # These mirror your original organization
     s_list_complete = []   # [layer][matrix][k]
     U_list_complete = []   # optional
 
@@ -816,7 +366,7 @@ def do_the_thing_MULTI(model, tokenizer, base_prompts, other_prompts, key, filen
         else:
             prompts=other_prompts
         nmats = min(batch_sz, num_mats-i)
-        acts, As = dataguy.collect_acts_and_jacs(
+        acts, As = data_handler.collect_acts_and_jacs(
             prompts=prompts,
             num_samples=nmats,
             filename=filename + "-acts-jacs",
@@ -825,7 +375,6 @@ def do_the_thing_MULTI(model, tokenizer, base_prompts, other_prompts, key, filen
 
         del acts  # free ASAP
 
-        # As: [num_matrices, num_layers, out_dim, in_dim]
         As = As.detach()  # keep on device for SVD
 
         if LATENT_DIM is None:
@@ -837,7 +386,6 @@ def do_the_thing_MULTI(model, tokenizer, base_prompts, other_prompts, key, filen
             skip = num_layers // num_plots
             
 
-            # initialize per-layer storage
             s_list_complete = [[] for _ in range(0,num_layers, skip)]
             all_s = [[] for _ in range(0,num_layers, skip)]
             U_list_complete = [[] for _ in range(0,num_layers, skip)]
@@ -845,14 +393,7 @@ def do_the_thing_MULTI(model, tokenizer, base_prompts, other_prompts, key, filen
 
         num_matrices = As.shape[0]
         num_layers = len(As[0])  # assuming all matrices have the same number of layers
-        # skip = num_layers // num_plots
 
-        # if num_plots == 1:
-        #     indices = [0]
-        # else:
-        #     indices = [round(i * (num_layers - 1) / (num_plots - 1)) for i in range(num_plots)]
-
-        # ---- process immediately, layer by layer ----
         for l, layer in enumerate(range(0, num_layers, skip)):
         # for l, layer in enumerate(indices):
             print(f"Batch {i}, Layer {layer}")
@@ -860,28 +401,19 @@ def do_the_thing_MULTI(model, tokenizer, base_prompts, other_prompts, key, filen
             for m in range(num_matrices):
                 J = As[m, layer]  # single Jacobian
 
-                # determine k dynamically (matches your logic)
                 k = min(J.shape[-1], k_max)
 
                 U_k, s_k, Vh_k = topk_svd(J, k)
                 s_all_k = np.linalg.svd(J, compute_uv=False)
 
-                # move minimal data to CPU
                 all_s[l].append(s_all_k)
                 s_list_complete[l].append(s_k)
                 U_list_complete[l].append(U_k)
 
 
     for i in range(0, len(s_list_complete)):
-    # for i in range(1):
         print(f"Layer {i}")
         
-        # Convert all tensors to numpy
-        
-
-        # Full SVDs
-        
-        # w_list = [s / sum(s) for s in s_list]
         s_list = s_list_complete[i]
         w_list = [s / s.sum() for s in s_list]
         U_list = U_list_complete[i]
@@ -899,7 +431,6 @@ def do_the_thing_MULTI(model, tokenizer, base_prompts, other_prompts, key, filen
                 print(U_list[j].shape)
                 angles = subspace_angles(U_list[j], U_list[r])
                 score = spectral_subspace_similarity(U_list[j], s_list[j], U_list[r], s_list[r])
-                # score = weighted_cos(angles, w_list[j], w_list[r])
 
                 sim_mat[j,r] = score
         similarities.append(sim_mat)
@@ -918,40 +449,21 @@ def random_mat(n, k, rng=None):
        rng = np.random.default_rng()
 
 
-   # X = rng.standard_normal((n, k))
-   # Q, R = np.linalg.qr(X)
-
-
-   # Fix sign ambiguity for reproducibility / true Haar
-   # signs = np.sign(np.diag(R))
-   # Q *= signs
    X = np.random.randn(n, k)
    X = X / np.linalg.norm(X, axis=0, keepdims=True)
    return X
 
 def compute_random(d,k,num_mats):
-    # print(len(s_ref[0]))
 
     s_ref = np.ones(k)
     w_energy = np.array([s /  sum(s_ref) for s in s_ref])
-    # w_energy = np.ones(A_m.shape[-1])/ A_m.shape[-1]
-
-
-
 
     num_trials = num_mats
     S_rand_energy = np.zeros((num_trials, num_trials))
     n = d
-    # print(w_energy)
     M1 = [random_mat(n, k) for i in range(num_trials)]
-    # M2 = [random_orthonormal(n, k) for i in range(num_trials)]
     for r in range(num_trials):
         for p in range(num_trials):
-            # angles = subspace_angles(M1[r], M1[p])
-            # print(np.cos(angles.flatten().mean()))
-            # print("\ncosine sim")
-            # print(cosine_similarity(M1.T, M2.T).mean())
-            # score = weighted_cos(angles, w_energy, w_energy)
             score = spectral_subspace_similarity(M1[r], s_ref, M1[p], s_ref)
             S_rand_energy[r, p] = score
 
@@ -988,15 +500,6 @@ def get_tox_prompts(lb, ub):
 
 
 def main():
-
-    # models = [
-    #     'google/gemma-2-2b',
-    #     # "meta-llama/Llama-3.2-1B",
-    #     # 'google/gemma-2-9b',
-    #     # "meta-llama/Meta-Llama-3-8B",
-    #     # "Qwen/Qwen2.5-3B",
-    #     # "Qwen/Qwen2.5-14B",
-    # ]
 
     models = {
         "gemma2b": "google/gemma-2-2b",
@@ -1044,18 +547,6 @@ def main():
     }
 
 
-    # for i, m in enumerate(models):
-    #     do_the_thing(m, filenames[i], from_file=False)
-    #     print("done with ", m)
-
-    # fp = "mat_subspace_couple/gemma-2-2b/football/coupling_data_n115.pt"
-    # from_file(fp)
-
-    # fp = "mat_subspace_couple/gemma-2-2b/other/coupling_data_n115.pt"
-    # from_file(fp)
-
-
-    # concepts = ["circus"]
     concepts = [
         # "shelter", 
         # "carbon", 
@@ -1092,15 +583,9 @@ def main():
             key = model_keys[model_name]
             con_prompts, other_prompts = get_target_and_other_sentences("concepts/filtered_sentences.csv", concept)
             filename = concept + "_ordered"
-        # # def     do_the_thing_better(model, tokenizer, prompts, key, filename, num_plots=3):
-            # do_the_thing_try(model, tokenizer, con_prompts, key, filename, 3)
-            do_the_thing_BIG(model, tokenizer, con_prompts, key, filename, 3, num_mats=50, batch_sz=batch_sz)
+            alignment_plots(model, tokenizer, con_prompts, key, filename, 3, num_mats=50, batch_sz=batch_sz)
 
-            # filename = "other_ordered"
-            # do_the_thing_BIG(model, tokenizer, other_prompts, key, filename, num_mats=50, batch_sz=15)
             print(f"LATENT: {LATENT_DIM}")
-            # dat = compute_random(LATENT_DIM, LATENT_DIM//20, num_mats=50)
-            # np.save(pth + key + '/rand_baseline_ord_BIG.npy', dat)
 
     elif args.task == 'law':
         print(f"LAW:")
@@ -1111,7 +596,7 @@ def main():
             law_prompts.append(ds[i]['input_options'][0])
         filename = "law_prompts"
 
-        do_the_thing_BIG(model, tokenizer, law_prompts, key, filename, 3, num_mats=50, batch_sz=batch_sz)
+        alignment_plots(model, tokenizer, law_prompts, key, filename, 3, num_mats=50, batch_sz=batch_sz)
 
         print(f"LATENT: {LATENT_DIM}")
 
@@ -1124,7 +609,7 @@ def main():
             code_prompts.append(ds[i]['prompt'])
         filename = "code_prompts"
 
-        do_the_thing_BIG(model, tokenizer, code_prompts, key, filename, 3, num_mats=50, batch_sz=batch_sz)
+        alignment_plots(model, tokenizer, code_prompts, key, filename, 3, num_mats=50, batch_sz=batch_sz)
 
         print(f"LATENT: {LATENT_DIM}")
 
@@ -1133,11 +618,8 @@ def main():
         print(f"MTNT+CODE")
         key = model_keys[model_name]
         ds = load_dataset("openai/openai_humaneval")['test']
-        # con_prompts, other_prompts = get_target_and_other_sentences("concepts/filtered_sentences.csv", concept)
 
         mtnt = load_mtnt()
-        # adv = load_adversarial()
-        # nontox = get_tox_prompts(0,0.1)
 
 
         code_prompts = []
@@ -1145,7 +627,7 @@ def main():
             code_prompts.append(ds[i]['prompt'])
         filename = "MTNT+CODE_prompts"
 
-        do_the_thing_MULTI(model, tokenizer, code_prompts, mtnt, key, filename, 3, num_mats=50, batch_sz=batch_sz)
+        alignment_plots_multi(model, tokenizer, code_prompts, mtnt, key, filename, 3, num_mats=50, batch_sz=batch_sz)
 
         print(f"LATENT: {LATENT_DIM}")
 
@@ -1155,7 +637,6 @@ def main():
         key = model_keys[model_name]
         ds = load_dataset("openai/openai_humaneval")['test']
         con_prompts, other_prompts = get_target_and_other_sentences("concepts/filtered_sentences.csv", "cloud")
-        # con_prompts, other_prompts = get_target_and_other_sentences("concepts/filtered_sentences.csv", concept)
 
         # mtnt = load_mtnt()
         adv = load_adversarial()
@@ -1166,7 +647,7 @@ def main():
             code_prompts.append(ds[i]['prompt'])
         filename = "adv+cloud"
 
-        do_the_thing_MULTI(model, tokenizer, code_prompts, adv, key, filename, 3, num_mats=50, batch_sz=batch_sz)
+        alignment_plots_multi(model, tokenizer, code_prompts, adv, key, filename, 3, num_mats=50, batch_sz=batch_sz)
 
         print(f"LATENT: {LATENT_DIM}")
 

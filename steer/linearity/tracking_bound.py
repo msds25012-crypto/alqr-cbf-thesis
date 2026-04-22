@@ -15,10 +15,10 @@ import json
 # from linearization import compute_lin_err as OLcompute_lin_err
 import matplotlib.pyplot as plt
 import numpy as np
+from pathlib import Path
 
-with open('config/config.yaml', 'r') as f:
-    config_data = yaml.safe_load(f)
-PICKLE_JAR = config_data["environment"]["pickle_jar"]
+from steer.config import config
+PICKLE_JAR = Path(__file__).resolve().parent / config["environment"]["pickle_jar"]
 
 device = th.device("cuda" if th.cuda.is_available() else "cpu")
 print(f"device: {device}")
@@ -53,7 +53,7 @@ def get_safe_prompts():
 
 def load_file(filename):
     try:
-        with open(PICKLE_JAR + filename + ".pkl", "rb") as f:
+        with open(PICKLE_JAR / (filename + ".pkl"), "rb") as f:
             return pickle.load(f)
     except FileNotFoundError:
         return None
@@ -85,12 +85,6 @@ def compute_lin_err(nom_acts, jacs, acts, var, cov, P):
         Pnorm_list.append(th.sqrt(err.T @ P[i+1] @ err).item())
         # err_list.append(err.tolist())
 
-        # print((th.sum(th.abs(err / var[i]))/err.shape[-1]).item())
-        # print((th.norm(err / var[i])).item())
-        # print((th.dot(Adelta_xt, delta_xtp1)/(th.norm(Adelta_xt)*th.norm(delta_xtp1))).item()) # cosine similarity
-        # print((th.norm(err) / (th.norm(nom_acts[i+1]))).item())
-        # print((th.norm(err) / (nom_acts.shape[-1])).item())
-        # print(f"max: {th.max(err).item()}, min: {th.min(err).item()}")
     
     data = {
         "l1_by_var": l1norm_byvar_list,
@@ -111,10 +105,6 @@ def helper(X1, X2):
     # for i in range(X1.shape[0]):
 
 def lin_err_CL(nom_acts, jacs, acts, U, var, diffs, cov, P):
-    # print(nom_acts.shape)
-    # print(jacs.shape)
-    # print(acts.shape)
-    # print(U.shape)
     l1norm_byvar_list = []
     avg_l1norm_bydiffs_list = []
     avg_l1norm_byvar_list = []
@@ -160,22 +150,9 @@ def lin_err_CL(nom_acts, jacs, acts, U, var, diffs, cov, P):
 
 
         errbydiff = err / diffs[i+1]
-        # errbyvar = err / var[i]
         Pnorm_list.append(th.sqrt(err.T @ P[i+1] @ err).item())
-        # Pnorm_list.append(th.sqrt(errbydiff.T @ P[i+1] @ errbydiff).item())
-        # Pnorm_list.append(th.sqrt(errbyvar.T @ P[i+1] @ errbyvar).item())
-        # linfty_by_var_list.append(th.max(th.abs(err)).item())
-        # l1byvar = th.sum(th.abs(err / var[i]))
 
-        # l1norm_byvar_list.append((l1byvar).item())
-        # avg_l1norm_byvar_list.append((l1byvar / err.shape[-1]).item())
-        # l2norm_byvar_list.append(th.norm(err / var[i]).item())
-        # cos_sim_list.append((th.dot(delta_xt_cl, true_delta)/(th.norm(delta_xt_cl)*th.norm(true_delta))).item()) # cosine similarity
-        # l2norm_list.append(th.norm(err).item())
         linfty_by_var_list.append(th.max(th.abs(err)/ std).item())
-        # err_list.append(err.tolist())
-        # print((th.sum(th.abs(err / var[i]))/err.shape[-1]).item())
-        # print((th.dot(delta_xt, true_delta)/(th.norm(delta_xt)*th.norm(true_delta))).item()) # cosine similarity
 
     data = {
         "l1": l1_list,
@@ -228,33 +205,22 @@ def is_contracting(A, Pi, Pip1, gamma=1.0):
 
 def bound_at_k(k, delta_x0, errs, A_cl, P):
     phi_k_0 = th.eye(A_cl.shape[-1], device=device)
-    # phi_bar = 1
 
     sigma = 0
 
 
     for i in range(k-1):
         phi_k_0 = A_cl[i] @ phi_k_0
-        # phi_bar *= op_norm(A_cl[i], P[i], P[i+1])
 
-    # delta_xk = delta_x0
 
     t1 = op_norm(phi_k_0, P[0], P[k]) * th.sqrt(delta_x0.T @ P[0] @ delta_x0)
-    # t1 = phi_bar
 
 
     for i in range(k):
         phi_k_i = th.eye(A_cl.shape[-1], device=device)
-        # sigma += op_norm(A_cl[i], P[i], P[i+1])*th.sqrt(errs[i].T @ P[i] @ errs[i])
         for j in range(i+1, k):
             phi_k_i = A_cl[j] @ phi_k_i
         
-
-        # delta_xk = A_cl[i] @ delta_xk
-        # sigma += op_norm(A_cl[i], P[i], P[i+1])*errs[i] / th.sqrt(delta_xk.T @ P[i] @ delta_xk)
-        # print(f"P[i+1] shape {P[i+1].shape}")
-        # print(f"P[i+1] shape {P[k].shape}")
-        # print(f"phi k i] shape {P[k].shape}")
         sigma += op_norm(phi_k_i, P[i+1], P[k])*errs[i]
     
 
@@ -359,16 +325,10 @@ def load_adversarial():
 model_name = "Qwen/Qwen2.5-3B"
 # model_name = "meta-llama/Meta-Llama-3-8B"
 
-# model_name = "google/gemma-2-9b-it"
-# model_name = "Qwen/Qwen2.5-14B-Instruct"
-# model_name = "meta-llama/Llama-3.2-1B"
-
 
 model, tokenizer = load_model(model_name, quant=True)
 
 
-from datasets import load_dataset
-import random
 ds = load_dataset("llm-aes/writing-prompts")["train"]
 # prompts = get_safe_prompts()
 rand_prompts = [d['prompt'][-32:] for d in ds]
@@ -392,41 +352,8 @@ nontox = get_tox_prompts(0,0.1)
 tox = get_tox_prompts(0.8,1)
 
 
-
-
-# rand_prompts = [
-#     "orbit", "cascade", "velvet fur", "quantum", "ember",
-#     "lantern dog", "echo trask", "harvest", "rift", "mosaic",
-#     "drift", "crimson crime", "signal", "hollow knight", "atlas",
-#     "breeze", "glyph", "summit peak", "current", "nova"
-# ]
-# rand_prompts = []
-# for p in prompts:
-#     ind = random.randint(0, len(p))
-#     rand_prompts.append(p[:ind])
-# print(rand_prompts[0])
-
-
 noms = []
 
-
-# steer = LQRSteering(model, tokenizer, 1, 0.1, 10)
-# for i in range(3):    
-#     out = steer.track_tokens(rand_prompts[0], rand_prompts[1+i], 1)
-#     X = steer.X[0][:,-1,:].detach().cpu()
-#     X_cl = steer.X_cl[0][:,-1,:].detach().cpu()
-#     A = steer.A.detach().cpu()
-#     K = steer.K.detach().cpu()
-#     U = steer.U.detach().cpu()
-#     dat = {
-#         "X_nom": X,
-#         "A_nom": A,
-#         "X_cl": X_cl,
-#         "K": K,
-#         "U": U,
-#     }
-#     noms.append(dat)
-#     print(f"Steered out: {out}")
 steer = LQRSteering(model, tokenizer, 10, 10, 10)
 
 p = 1
@@ -446,11 +373,7 @@ print(b)
 o = th.min(th.tensor([a, b, c, d, e])).item()
 print(o)
 while i < 5:    
-    # ind = random.randint(0, len(rand_prompts)-2)
     ind = random.randint(0, o-2)
-    # out = steer.track_tokens(rand_prompts[ind], rand_prompts[ind+1], 1)
-    # out = steer.track_tokens(tox[ind], nontox[ind+1], k=1)
-    # out = steer.track_tokens(mtnt[ind], code[ind+1], k=1)
     out = steer.track_tokens(adv[ind], adv[ind+1], k=1)
     X = steer.X[0][:,-1,:].detach().cpu()
     X_cl = steer.X_cl[0][:,-1,:].detach().cpu()
@@ -481,15 +404,12 @@ goof = noms[0]
 P_cpu = solve_backwards_lyapunov(goof["A_nom"]-goof["K"])
 B = th.eye(goof["A_nom"].shape[-1])
 B = B.repeat(goof["A_nom"].shape[0], 1, 1)
-# P_cpu = th.eye(goof["A_nom"].shape[-1]).repeat(goof["A_nom"].shape[0]+1, 1, 1)
 out = compute_closed_loop_lin_err_P(goof["X_nom"], goof["X_cl"], goof["A_nom"], B, goof["K"], P_cpu)
 
 P = P_cpu
-dataguy = ContrastiveBuilder(model, tokenizer)
+data_handler = ContrastiveBuilder(model, tokenizer)
 
-# ds = load_dataset("llm-aes/writing-prompts")["train"]
-# rand_prompts = [d['prompt'][-32:] for d in ds]
-acts_new = dataguy.collect_activations(prompts=rand_prompts, num_samples=15)
+acts_new = data_handler.collect_activations(prompts=rand_prompts, num_samples=15)
 
 cov_mat = [th.cov(acts_new[:,i,:].T) for i in range(1, acts_new.shape[1])]
 variances = [th.diag(th.cov(acts_new[:,i,:].T)) for i in range(1, acts_new.shape[1])]
@@ -506,44 +426,6 @@ x_Pnorm = th.sqrt(
     th.bmm(xP, x_col.transpose(1, 2)).squeeze()
 )
 
-# print(x_Pnorm)
-
-# alphas = th.zeros((acts_new.shape[1], acts_new.shape[0]))
-
-# print(P[3])
-
-# for i in range(1, acts_new.shape[1]):
-#     for j in range(acts_new.shape[0]):
-#         n1 = P_norm(acts_new[j][i], P[i])
-#         nm1 = P_norm(acts_new[j][i-1], P[i-1])
-
-#         # print(f"n1: {n1}, n2: {nm1}")
-#         a = th.log(n1 / nm1)
-#         alphas[i,j] = a
-#         # print(a)
-
-# mean_alpha = th.mean(alphas)
-# # print(mean_alphas)
-
-# # n1 = P_norm(acts_new[0][0], P[0])
-# # n10 = P_norm(acts_new[0][20], P[20])
-# # print(acts_new.shape)
-# # print(f"n0 = {n1}")
-# # print(f"n10 = {n10}")
-# # print(f"n10 = {th.exp(mean_alphas*20)*n1}")
-
-# # print(th.mean(th.norm(acts_new, dim=-1), dim=0))
-
-# x_Pnorm = th.zeros(acts_new.shape[1])
-# x0_norm = P_norm(th.mean(acts_new[:][0], dim=0), P[0])
-# print(x0_norm)
-
-# x_Pnorm[0] = x0_norm
-
-# for i in range(1,acts_new.shape[1]):
-#     x_Pnorm[i] = th.exp(mean_alpha*i) * x0_norm
-
-# print(x_Pnorm)
 
 def get_global_L(noms, P):
     L = None
@@ -576,16 +458,13 @@ def get_global_L(noms, P):
 
 
 # NEW
-dataguy = ContrastiveBuilder(model, tokenizer)
+data_handler = ContrastiveBuilder(model, tokenizer)
 
-acts_new = dataguy.collect_activations(prompts=rand_prompts, num_samples=10)
+acts_new = data_handler.collect_activations(prompts=rand_prompts, num_samples=10)
 
 
 act_mean = acts_new.mean(0).to(device)
-# # x_mean: (27, 2304)
-# # P:      (2304, 2304)
 P = P_cpu.to(device)
-# P = P_cpu
 
 global_L = get_global_L(noms, P_cpu)
 
@@ -594,30 +473,16 @@ print(global_L)
 
 x_col = act_mean.unsqueeze(1)
 
-# (27, 1, 2304)
 xP = th.bmm(x_col, P)
 
-# (27, 1, 1) → (27,)
 x_Pnorm = th.sqrt(
     th.bmm(xP, x_col.transpose(1, 2)).squeeze()
 )
 
-# print(act_mean.shape)
-
-# xP = act_mean @ P                    # (27, 2304)
-# x_Pnorm = th.sqrt(
-#     th.sum(xP * act_mean, dim=1)    # row-wise x^T P x
-# )
 
 x_Pnorm = x_Pnorm.to(device)
 print(x_Pnorm.shape)
 X_nom = dat["X_nom"].to(device)
-
-# normalization (unchanged)
-# Pvar = [
-#     th.sqrt(th.trace(P[i] @ th.cov(acts_new[:, i, :].T).to(device))).item()
-#     for i in range(acts_new.shape[1])
-# ]
 
 all_bounds = []
 all_errs = []

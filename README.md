@@ -15,6 +15,8 @@ cd lqr-activation-steering
 pip install -r requirements.txt
 ```
 
+Make sure to update 'steer/config/config.yaml' with the desired filepaths.
+
 ---
 
 ## Jacobian Collection

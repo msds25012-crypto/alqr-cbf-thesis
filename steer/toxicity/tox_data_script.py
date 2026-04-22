@@ -99,18 +99,18 @@ def main():
     toxic_prompts = get_tox_prompts(0.8, 1)
     nontoxic_prompts = get_tox_prompts(0, 0.1)
 
-    dataguy = ContrastiveBuilder(model, tokenizer)
+    data_handler = ContrastiveBuilder(model, tokenizer)
 
     filename = key + '-tox'
-    dataguy.collect_data_batch(toxic_prompts, 200, filename)
+    data_handler.collect_data_batch(toxic_prompts, 200, filename)
     print("done with", filename)
 
     filename = key + '-nontox'
-    dataguy.collect_data_batch(nontoxic_prompts, 200, filename)
+    data_handler.collect_data_batch(nontoxic_prompts, 200, filename)
     print("done with ", filename)
 
     filename = key + '-nontox_jac'
-    dataguy.collect_jacobians(nontoxic_prompts, 50, filename, max_ctx=24)
+    data_handler.collect_jacobians(nontoxic_prompts, 50, filename, max_ctx=24)
     print("done with jac")
 
 if __name__ == "__main__":
