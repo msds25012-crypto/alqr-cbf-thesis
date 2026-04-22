@@ -1,6 +1,6 @@
 # Local Linearity of LLMs Enables Activation Steering via Model-Based Linear Optimal Control
 
-This repository contains the implementation of the methods and benchmarks proposed in [Link Text](TODO). Core implementations, including **A-LQR** and **S-PID**, are located in the `steer` directory.
+This repository contains the implementation of the methods and benchmarks proposed in [this paper](https://arxiv.org/abs/2604.19018). Core implementations, including **A-LQR** and **S-PID**, are located in the `steer` directory.
 
 ---
 
@@ -76,7 +76,12 @@ python -m steer.refusal.test_ref # A-LQR+
 If you use this project in your work, please cite:
 
 ```bibtex
-TODO
+@article{skifstad2026local,
+  title={Local Linearity of LLMs Enables Activation Steering via Model-Based Linear Optimal Control},
+  author={Skifstad, Julian and Yang, Annie Xinyue and Chou, Glen},
+  journal={arXiv preprint arXiv:2604.19018},
+  year={2026}
+}
 ```
 
 ---
@@ -85,6 +90,6 @@ TODO
 
 For questions or collaboration:
 
-- Name: Your Name  
-- Email: your.email@example.com  
-- GitHub: https://github.com/yourusername
+- Name: Julian Skifstad  
+- Email: jskifstad3@gatech.edu  
+- GitHub: https://github.com/jaskifstad
