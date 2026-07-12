@@ -1,6 +1,9 @@
 # Local Linearity of LLMs Enables Activation Steering via Model-Based Linear Optimal Control
 
-This repository contains the implementation of the methods and benchmarks proposed in [this paper](https://arxiv.org/abs/2604.19018). Core implementations, including **A-LQR** and **S-PID**, are located in the `steer` directory.
+[![Paper](https://img.shields.io/badge/arXiv-2604.19018-b31b1b.svg)](https://arxiv.org/abs/2604.19018)
+[![Website](https://img.shields.io/badge/Website-Visit-blue.svg)](https://trustworthyrobotics.github.io/a_lqr_site/)
+
+This repository contains the core implementations of **A-LQR** and **S-PID**, located in the `steer` directory.
 
 ---
 
