@@ -64,6 +64,9 @@ class LQRSteering:
             self.B = th.eye(self.n).repeat(self.T, 1, 1).to(self.device) 
             self.K = lqr.time_varying_lqr(self.A, self.B, self.Q, self.R, self.Qf) if A is not None else None
             # print(f"self.K[0]: {self.K[0]}")
+        # CBF: initialize P matrix as scaled identity (from supervisor notes)
+        self.P = (0.5 * th.eye(self.n)).to(self.device)
+        self.gamma_cbf = 0.1  # CBF tuning parameter
         th.cuda.empty_cache()
         if (self.model.device == 'cpu'):
             self.model=self.model.to(self.device)
@@ -225,23 +228,72 @@ class LQRSteering:
 
             if self.setpoint_type == "linear":
                 v = self.E_unit[layer_idx]
-                alpha = th.tensor([self.betas[layer_idx] for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
+                alpha = th.tensor([self.betas[layer_idx] for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0).float(), th.transpose(x.unsqueeze(0),-2,-1).float())
                 e = alpha.squeeze(0).T @ v.unsqueeze(0)
             elif self.setpoint_type == "angular":
                 e = self.get_angular_sp(x, layer_idx) - x
             else:
                 raise ValueError("Unsupported setpoint type")
             u_t = th.bmm(self.K[layer_idx].unsqueeze(0), th.transpose(e.unsqueeze(0),-2,-1)).squeeze(0).T
-            self.U[layer_idx] = u_t[-1]
-
+            # CBF safety filter (Theorem 4.2 closed-form solution)
+            u_cbf = self.cbf_filter(x, u_t, layer_idx)
+            u_safe = u_t.float() + u_cbf.float()
+            self.U[layer_idx] = u_safe[-1]
             if isinstance(output,tuple):
-                output[0][...,-1,:] = output[0][...,-1,:] + u_t
-            else: 
-                output[...,-1,:] = output[...,-1,:] + u_t
+                output[0][...,-1,:] = output[0][...,-1,:] + u_safe
+            else:
+                output[...,-1,:] = output[...,-1,:] + u_safe
 
             # print(f"output: {output}")
             return output
 
+
+    def cbf_filter(self, x, u_lqr, layer_idx):
+        """
+        CBF safety filter using Theorem 4.2 closed-form solution.
+        
+        Computes phi_0 = x^T (A^T P + PA) x  (natural drift)
+        Computes phi_2 = 2 x^T P              (control sensitivity)
+        
+        If phi_0 > 0: u_cbf = -phi_0 / phi_2  (counteract drift)
+        Else:         u_cbf = 0                (already safe)
+        """
+        P = self.P  # (n, n)
+        
+        # x shape is (batch, n) -- use last token
+        z = x[-1].float()  # (n,)
+        
+        # Compute A^T P + PA for this layer
+        # Use stored Jacobian if available, else use identity
+        if hasattr(self, 'A') and self.A is not None:
+            A_k = self.A[layer_idx].float()  # (T, n, n) -> take first
+            if A_k.dim() == 3:
+                A_k = A_k[0]  # (n, n)
+        else:
+            A_k = th.eye(self.n, device=self.device).float()
+        
+        ATP_PA = A_k.T @ P + P @ A_k  # (n, n)
+        
+        # phi_0 = z^T (A^T P + PA) z -- scalar
+        phi_0 = (z @ ATP_PA @ z).item()
+        
+        # phi_2 = 2 z^T P -- vector (n,)
+        phi_2 = 2.0 * (z @ P)  # (n,)
+        
+        # Theorem 4.2 closed-form solution
+        if phi_0 > 0:
+            phi_2_norm_sq = (phi_2 @ phi_2).item()
+            if phi_2_norm_sq > 1e-8:  # avoid division by zero
+                u_cbf = -(phi_0 / phi_2_norm_sq) * phi_2  # (n,)
+            else:
+                u_cbf = th.zeros(self.n, device=self.device).float()
+        else:
+            u_cbf = th.zeros(self.n, device=self.device).float()
+        
+        # Reshape to match u_lqr shape (batch, n)
+        u_cbf = u_cbf.unsqueeze(0).expand_as(u_lqr.float())
+        
+        return u_cbf
     def register_setpoint_tracking_hooks(self):
         """Register the hooks."""
 
@@ -264,7 +316,7 @@ class LQRSteering:
 
         v = self.E_unit[layer_idx]
         v_alt = self.E_alt_unit[layer_idx]
-        alpha = th.tensor([self.betas[layer_idx] for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
+        alpha = th.tensor([self.betas[layer_idx] for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0).float(), th.transpose(x.unsqueeze(0),-2,-1).float())
         alpha_alt = th.tensor([self.betas_alt[layer_idx] for i in range(x.shape[0])], device=self.device) - th.bmm(v_alt.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
         
         e = alpha.squeeze(0).T @ v.unsqueeze(0)
@@ -300,7 +352,7 @@ class LQRSteering:
     def hook_get_sp_signal(self, layer_idx, module, input, output):
         x = input[0][:,-1,:]
         v = self.E_unit[layer_idx]
-        raw_signal = th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
+        raw_signal = th.bmm(v.unsqueeze(0).unsqueeze(0).float(), th.transpose(x.unsqueeze(0),-2,-1).float())
         nm = th.norm(self.E[layer_idx])
         signal = raw_signal
         self.setpoint_signals.append(th.mean(signal).item())
@@ -311,13 +363,13 @@ class LQRSteering:
             else: 
                 x = output[...,-1,:]
             if self.mode != None:
-                alpha = th.tensor([self.betas[layer_idx] for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
+                alpha = th.tensor([self.betas[layer_idx] for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0).float(), th.transpose(x.unsqueeze(0),-2,-1).float())
                 e = alpha.squeeze(0).T @ v.unsqueeze(0)
                 u_t = th.bmm(self.K[layer_idx].unsqueeze(0), th.transpose(e.unsqueeze(0),-2,-1)).squeeze(0).T
                 x = x + u_t
                 
             v = self.E_unit[0]
-            raw_signal = th.bmm(v.unsqueeze(0).unsqueeze(0), th.transpose(x.unsqueeze(0),-2,-1))
+            raw_signal = th.bmm(v.unsqueeze(0).unsqueeze(0).float(), th.transpose(x.unsqueeze(0),-2,-1).float())
             nm = th.norm(self.E[layer_idx+1])
             signal = raw_signal / nm
             self.setpoint_signals.append(th.mean(signal).item())
@@ -672,7 +724,7 @@ class LQRSteering:
             position_embeddings = self.model.model.rotary_emb(hidden_states, position_ids)
             wrapped_tfs_temp = [partial(lqr.tf_block_wrapper, tf, attention_mask, position_ids, position_embeddings) for tf in self.model.model.layers]
             tfs_with_control_temp = [partial(lqr.transformerBlockControl, tf) for tf in wrapped_tfs_temp]
-            self.A, _ = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X[0]) # linearizing about first subtrajectory
+            self.A = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X[0]) # linearizing about first subtrajectory
             self.K = lqr.time_varying_lqr(self.A, self.B, self.Q, self.R, self.Qf)
 
 
@@ -733,7 +785,7 @@ class LQRSteering:
         
         self.A = [th.eye(self.n).unsqueeze(0).repeat(self.T, 1, 1).to(self.device) for i in range (k)]
         for i in range(k):
-            self.A[i], _ = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X[i])
+            self.A[i] = lqr.linearize(tfs_with_control_temp,self.T,self.m,self.X[i])
         
         return self.X, self.A, output
 

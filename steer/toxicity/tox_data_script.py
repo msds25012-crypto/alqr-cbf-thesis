@@ -36,6 +36,8 @@ def load_model(model_name, quant=False):
         model = AutoModelForCausalLM.from_pretrained(
             model_name).to(device)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.pad_token_id = tokenizer.eos_token_id
 
     return model, tokenizer
         
@@ -64,7 +66,7 @@ def main():
         "Qwen/Qwen2.5-3B": "Qwen2.5-3B",
         "Qwen/Qwen2.5-14B": "Qwen2.5-14B",
         "Qwen/Qwen2.5-32B": "Qwen2.5-32B",
-        "llama1b": "Llama-3.2-1B"
+        "meta-llama/Llama-3.2-1B": "Llama-3.2-1B"
     }
 
     models = {
@@ -92,7 +94,7 @@ def main():
         raise ValueError(f"Specify a model: {models}")
 
 
-    model, tokenizer = load_model(model_name, quant=True)
+    model, tokenizer = load_model(model_name, quant=False)
 
     key = model_keys[model_name]
 

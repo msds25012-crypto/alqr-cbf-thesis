@@ -10,7 +10,7 @@ def generation(models, params):
     toxic_prompts = utils.get_tox_prompts(0.0, 1)
     for model_name in models:
         print(f"Running Generation: {model_name}")
-        model, tokenizer = utils.load_model(model_name, quant=True)
+        model, tokenizer = utils.load_model(model_name, quant=False)
         l_list = params[model_name]['l_list']
         lqr_p = params[model_name]['LQR_params']
         q = lqr_p[0]
@@ -34,7 +34,7 @@ def generation(models, params):
         sweeps = []
         for i in range(1):
             # print(f"running test_toxicity.py: {model_name}")
-            num_trials = 10
+            num_trials = 200
             s = run_trials(
                 model, 
                 tokenizer, 
@@ -74,7 +74,7 @@ def mmlu(models, params):
 
     for model_name in models:
         print(f"Running MMLU: {model_name}")
-        model, tokenizer = utils.load_model(model_name, quant=True)
+        model, tokenizer = utils.load_model(model_name, quant=False)
         l_list = params[model_name]['l_list']
         lqr_p = params[model_name]['LQR_params']
         q = lqr_p[0]
@@ -107,12 +107,12 @@ def mmlu(models, params):
 
 def main():
     models = [
-        'google/gemma-2-2b',
+        # 'google/gemma-2-2b',
         # 'google/gemma-2-9b',
         # "meta-llama/Meta-Llama-3-8B",
         # "Qwen/Qwen2.5-14B",
         # "Qwen/Qwen2.5-3B",
-        # "meta-llama/Llama-3.2-1B"
+        "meta-llama/Llama-3.2-1B"
         # "Qwen/Qwen2.5-32B"
     ]
 
@@ -149,7 +149,7 @@ def main():
     }
 
     # Generate outputs, measure toxicity, and measure Dist 1,2,3
-    # generation(models, params)
+    generation(models, params)
     # print("===========================")
     # print("Done with all generations")
     # print("===========================")
@@ -161,7 +161,7 @@ def main():
     # print("===========================")
 
     # Get MMLU performance
-    mmlu(models, params)
+    # mmlu(models, params)
     print("===========================")
     print("finish all MMLU")
     print("===========================")
