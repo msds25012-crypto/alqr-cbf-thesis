@@ -291,6 +291,8 @@ class LQRSteering:
             u_cbf = th.zeros(self.n, device=self.device).float()
         
         # Reshape to match u_lqr shape (batch, n)
+        # Clip CBF correction to prevent corrupting activations
+        u_cbf = th.clamp(u_cbf, -0.01, 0.01)
         u_cbf = u_cbf.unsqueeze(0).expand_as(u_lqr.float())
         
         return u_cbf

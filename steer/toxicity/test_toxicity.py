@@ -65,6 +65,7 @@ def load_file(filename):
         return None
 
 def run_trials(model, tokenizer, toxic_prompts, num_trials, A, X_contr, l_list=[1], q_list=[0.1], r_list=[10], qf_list=[0.1], BATCH_SZ=10):
+    random.seed(42)
     samples = random.sample(toxic_prompts, num_trials)
     
     do_sample = True
