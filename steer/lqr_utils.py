@@ -194,8 +194,7 @@ def time_varying_lqr_noB_mem_efficient(A, Q, R, S_T):
         K[t] = th.linalg.solve(P, F)
 
         S[t] = (G - F.transpose(-2, -1) @ th.linalg.solve(P, F)).to('cpu')
-
-    return K
+    return K, S
 
 
 def time_varying_lqr(A, B, Q, R, S_T):

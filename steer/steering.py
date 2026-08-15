@@ -55,7 +55,8 @@ class LQRSteering:
         self.Qf = th.eye(self.n).to(self.device) * qf
         
         if preserve_mem:
-            self.K = lqr.time_varying_lqr_noB_mem_efficient(self.A, self.Q, self.R, self.Qf) if A is not None else None
+            result = lqr.time_varying_lqr_noB_mem_efficient(self.A, self.Q, self.R, self.Qf) if A is not None else (None, None)
+            self.K, self.S_layers = result
             del self.A
             del self.Q
             del self.R
@@ -258,7 +259,11 @@ class LQRSteering:
         If phi_0 > 0: u_cbf = -phi_0 / phi_2  (counteract drift)
         Else:         u_cbf = 0                (already safe)
         """
-        P = self.P  # (n, n)
+        # Use ARE-derived P matrix from Riccati recursion (layer-specific)
+        if hasattr(self, "S_layers") and self.S_layers is not None:
+            P = self.S_layers[layer_idx].to(self.device).float()
+        else:
+            P = self.P  # fallback to fixed P
         
         # x shape is (batch, n) -- use last token
         z = x[-1].float()  # (n,)
