@@ -68,6 +68,7 @@ class LQRSteering:
         # CBF: initialize P matrix as scaled identity (from supervisor notes)
         self.P = (0.5 * th.eye(self.n)).to(self.device)
         self.gamma_cbf = 0.1  # CBF tuning parameter
+        self.use_cbf = False  # Toggle CBF on/off
         th.cuda.empty_cache()
         if (self.model.device == 'cpu'):
             self.model=self.model.to(self.device)
@@ -238,7 +239,7 @@ class LQRSteering:
             u_t = th.bmm(self.K[layer_idx].unsqueeze(0), th.transpose(e.unsqueeze(0),-2,-1)).squeeze(0).T
             # CBF safety filter (Theorem 4.2 closed-form solution)
             u_cbf = self.cbf_filter(x, u_t, layer_idx)
-            u_safe = u_t.float() + u_cbf.float()
+            u_safe = u_t.float() + u_cbf.float() if self.use_cbf else u_t.float()
             self.U[layer_idx] = u_safe[-1]
             if isinstance(output,tuple):
                 output[0][...,-1,:] = output[0][...,-1,:] + u_safe

@@ -6,11 +6,21 @@ import json
 import os.path
 
 
+
+import torch
+import random
+import numpy as np
+torch.manual_seed(42)
+np.random.seed(42)
+random.seed(42)
+torch.cuda.manual_seed_all(42)
+print("Seed set to 42")
+
 def generation(models, params):
     toxic_prompts = utils.get_tox_prompts(0.0, 1)
     for model_name in models:
         print(f"Running Generation: {model_name}")
-        model, tokenizer = utils.load_model(model_name, quant=False)
+        model, tokenizer = utils.load_model(model_name, quant=True)
         l_list = params[model_name]['l_list']
         lqr_p = params[model_name]['LQR_params']
         q = lqr_p[0]
@@ -74,7 +84,7 @@ def mmlu(models, params):
 
     for model_name in models:
         print(f"Running MMLU: {model_name}")
-        model, tokenizer = utils.load_model(model_name, quant=False)
+        model, tokenizer = utils.load_model(model_name, quant=True)
         l_list = params[model_name]['l_list']
         lqr_p = params[model_name]['LQR_params']
         q = lqr_p[0]
