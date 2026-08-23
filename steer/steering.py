@@ -260,9 +260,15 @@ class LQRSteering:
         If phi_0 > 0: u_cbf = -phi_0 / phi_2  (counteract drift)
         Else:         u_cbf = 0                (already safe)
         """
-        # Use ARE-derived P matrix from Riccati recursion (layer-specific)
+        # Use ARE-derived P matrix from Riccati recursion (layer-specific),
+        # normalized to match the magnitude of the fixed 0.5*I baseline so the
+        # CBF correction doesn't blow up from S's raw scale.
         if hasattr(self, "S_layers") and self.S_layers is not None:
-            P = self.S_layers[layer_idx].to(self.device).float()
+            P_raw = self.S_layers[layer_idx].to(self.device).float()
+            p_scale = getattr(self, "p_scale", 0.5)  # matches old fixed P = 0.5*I magnitude
+            target_norm = p_scale * (self.n ** 0.5)   # ||0.5*I||_F = 0.5*sqrt(n)
+            raw_norm = th.norm(P_raw, p='fro') + 1e-8
+            P = P_raw * (target_norm / raw_norm)
         else:
             P = self.P  # fallback to fixed P
         
