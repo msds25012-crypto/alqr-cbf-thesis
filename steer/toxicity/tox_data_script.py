@@ -35,7 +35,7 @@ def load_model(model_name, quant=False):
     else: 
         model = AutoModelForCausalLM.from_pretrained(
             model_name).to(device)
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.pad_token_id = tokenizer.eos_token_id
 
