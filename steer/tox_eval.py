@@ -20,7 +20,7 @@ def generation(models, params):
     toxic_prompts = utils.get_tox_prompts(0.0, 1)
     for model_name in models:
         print(f"Running Generation: {model_name}")
-        model, tokenizer = utils.load_model(model_name, quant=True)
+        model, tokenizer = utils.load_model(model_name, quant=(model_name == "Qwen/Qwen2.5-3B"))
         l_list = params[model_name]['l_list']
         lqr_p = params[model_name]['LQR_params']
         q = lqr_p[0]
@@ -84,7 +84,7 @@ def mmlu(models, params):
 
     for model_name in models:
         print(f"Running MMLU: {model_name}")
-        model, tokenizer = utils.load_model(model_name, quant=True)
+        model, tokenizer = utils.load_model(model_name, quant=(model_name == "Qwen/Qwen2.5-3B"))
         l_list = params[model_name]['l_list']
         lqr_p = params[model_name]['LQR_params']
         q = lqr_p[0]

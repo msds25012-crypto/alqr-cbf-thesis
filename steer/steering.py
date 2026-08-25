@@ -69,7 +69,7 @@ class LQRSteering:
         self.P = (0.5 * th.eye(self.n)).to(self.device)
         self.gamma_cbf = 0.1  # CBF tuning parameter
         self.cbf_clamp = 0.005  # CBF correction clamp (tunable)
-        self.use_cbf = False  # Toggle CBF on/off
+        self.use_cbf = True  # Toggle CBF on/off
         th.cuda.empty_cache()
         if (self.model.device == 'cpu'):
             self.model=self.model.to(self.device)
