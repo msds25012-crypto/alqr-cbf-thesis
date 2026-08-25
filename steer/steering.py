@@ -68,6 +68,7 @@ class LQRSteering:
         # CBF: initialize P matrix as scaled identity (from supervisor notes)
         self.P = (0.5 * th.eye(self.n)).to(self.device)
         self.gamma_cbf = 0.1  # CBF tuning parameter
+        self.cbf_clamp = 0.005  # CBF correction clamp (tunable)
         self.use_cbf = False  # Toggle CBF on/off
         th.cuda.empty_cache()
         if (self.model.device == 'cpu'):
@@ -304,7 +305,8 @@ class LQRSteering:
         
         # Reshape to match u_lqr shape (batch, n)
         # Clip CBF correction to prevent corrupting activations
-        u_cbf = th.clamp(u_cbf, -0.01, 0.01)
+        cbf_clamp = getattr(self, "cbf_clamp", 0.01)
+        u_cbf = th.clamp(u_cbf, -cbf_clamp, cbf_clamp)
         u_cbf = u_cbf.unsqueeze(0).expand_as(u_lqr.float())
         
         return u_cbf
