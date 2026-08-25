@@ -149,7 +149,7 @@ def main():
                               'LQR_params': [0.1,10,1],
                               'instruct': False},
         "meta-llama/Llama-3.2-1B": {'filename_pfix': 'Llama-3.2-1B', 
-                              'l_list': [3.5], 
+                              'l_list': [2, 2.5, 3.5], 
                               'LQR_params': [0.1,1,1],
                               'instruct': False},
         "Qwen/Qwen2.5-32B": {'filename_pfix': 'Qwen2.5-32B', 
