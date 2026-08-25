@@ -127,6 +127,11 @@ def run_trials(model, tokenizer, toxic_prompts, num_trials, A, X_contr, l_list=[
                     contr_completions = []
                     counter = 0
 
+                    # Reset seed before every lambda so each run draws from an identical
+                    # RNG stream, regardless of position within a multi-lambda sweep.
+                    th.manual_seed(42)
+                    th.cuda.manual_seed_all(42)
+
                     contr_out = steer_contr.track_setpoint(samples, k, lmbda=l, do_sample=do_sample, temp = temp)
    
                     for i, inp in enumerate(samples):
