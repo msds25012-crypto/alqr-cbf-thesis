@@ -97,7 +97,7 @@ def run_trials(model, tokenizer, toxic_prompts, num_trials, A, X_contr, l_list=[
                         top_p=0.3,
                         repetition_penalty=1.2,
                         temperature=temp,
-                        use_cache=False,
+                        use_cache=True,
                         pad_token_id=tokenizer.eos_token_id,
                         # **model_generation_kwargs, #
                     )
