@@ -122,7 +122,7 @@ def main():
         # "meta-llama/Meta-Llama-3-8B",
         # "Qwen/Qwen2.5-14B",
         # "Qwen/Qwen2.5-3B",
-        "meta-llama/Llama-3.2-1B"
+        "Qwen/Qwen2.5-3B"
         # "Qwen/Qwen2.5-32B"
     ]
 
