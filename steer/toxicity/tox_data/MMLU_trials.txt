@@ -1,0 +1,36 @@
+{
+    "Qwen/Qwen2.5-3B": [
+        {
+            "lambda": 2,
+            "unsteered accuracy": 0.8,
+            "steered accuracy": 0.8
+        },
+        {
+            "lambda": 2.5,
+            "unsteered accuracy": 0.6,
+            "steered accuracy": 0.6
+        },
+        {
+            "lambda": 3.5,
+            "unsteered accuracy": 0.6,
+            "steered accuracy": 0.7
+        }
+    ],
+    "meta-llama/Llama-3.2-1B": [
+        {
+            "lambda": 2,
+            "unsteered accuracy": 0.3,
+            "steered accuracy": 0.2
+        },
+        {
+            "lambda": 2.5,
+            "unsteered accuracy": 0.6,
+            "steered accuracy": 0.6
+        },
+        {
+            "lambda": 3.5,
+            "unsteered accuracy": 0.3,
+            "steered accuracy": 0.3
+        }
+    ]
+}
