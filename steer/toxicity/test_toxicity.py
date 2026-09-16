@@ -68,7 +68,7 @@ def run_trials(model, tokenizer, toxic_prompts, num_trials, A, X_contr, l_list=[
     random.seed(42)
     samples = random.sample(toxic_prompts, num_trials)
     
-    do_sample = True
+    do_sample = False  # TEMP: greedy decoding diagnostic
     temp = 1
 
     # headers: 
