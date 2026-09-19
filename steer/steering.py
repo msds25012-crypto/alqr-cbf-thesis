@@ -69,6 +69,7 @@ class LQRSteering:
         self.P = (0.5 * th.eye(self.n)).to(self.device)
         self.gamma_cbf = 0.1  # CBF tuning parameter
         self.cbf_clamp = 0.005  # CBF correction clamp (tunable)
+        self.no_overshoot = True  # if True, LQR correction stops once past target instead of reversing
         self.use_cbf = True  # Toggle CBF on/off
         th.cuda.empty_cache()
         if (self.model.device == 'cpu'):
@@ -232,6 +233,8 @@ class LQRSteering:
             if self.setpoint_type == "linear":
                 v = self.E_unit[layer_idx]
                 alpha = th.tensor([self.betas[layer_idx] for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0).float(), th.transpose(x.unsqueeze(0),-2,-1).float())
+                if getattr(self, "no_overshoot", False):
+                    alpha = th.clamp(alpha, min=0)
                 e = alpha.squeeze(0).T @ v.unsqueeze(0)
             elif self.setpoint_type == "angular":
                 e = self.get_angular_sp(x, layer_idx) - x
@@ -380,6 +383,8 @@ class LQRSteering:
                 x = output[...,-1,:]
             if self.mode != None:
                 alpha = th.tensor([self.betas[layer_idx] for i in range(x.shape[0])], device=self.device) - th.bmm(v.unsqueeze(0).unsqueeze(0).float(), th.transpose(x.unsqueeze(0),-2,-1).float())
+                if getattr(self, "no_overshoot", False):
+                    alpha = th.clamp(alpha, min=0)
                 e = alpha.squeeze(0).T @ v.unsqueeze(0)
                 u_t = th.bmm(self.K[layer_idx].unsqueeze(0), th.transpose(e.unsqueeze(0),-2,-1)).squeeze(0).T
                 x = x + u_t
