@@ -68,3 +68,4 @@ wandb-summary.json
 *.parquet
 
 
+philpapers2020.jsonl
